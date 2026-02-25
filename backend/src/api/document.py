@@ -18,8 +18,8 @@ OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://localhost:8000")
 @router.post("/extract")
 async def extract_document(file: UploadFile = File(...)):
     """
-    Extract structured JSON from PDF files.
-    Pass-through endpoint to python-ocr-demo vision-extract API.
+    Extract structured JSON from PDF, Excel, and Image files.
+    Pass-through endpoint to python-ocr-demo API.
     """
     try:
         logger.info(f"📤 Processing file: {file.filename}")
@@ -30,18 +30,28 @@ async def extract_document(file: UploadFile = File(...)):
         if len(file_content) == 0:
             raise HTTPException(status_code=400, detail="Empty file uploaded")
         
-        # Validate file type
+        # Validate file type and determine endpoint
         file_ext = os.path.splitext(file.filename)[1].lower()
         
-        if file_ext != '.pdf':
+        # Supported file types (all use vision-extract)
+        pdf_types = ['.pdf']
+        excel_types = ['.xlsx', '.xls', '.xlsm', '.xlsb']
+        image_types = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+        
+        if file_ext in pdf_types:
+            endpoint = f"{OCR_SERVICE_URL}/api/vision-extract"
+            logger.info(f"📄 Using vision-extract for PDF")
+        elif file_ext in excel_types:
+            endpoint = f"{OCR_SERVICE_URL}/api/vision-extract"
+            logger.info(f"📊 Using vision-extract for Excel")
+        elif file_ext in image_types:
+            endpoint = f"{OCR_SERVICE_URL}/api/vision-extract"
+            logger.info(f"🖼️ Using vision-extract for Image")
+        else:
             raise HTTPException(
                 status_code=400,
-                detail="Unsupported file type. Only PDF files are supported (.pdf)"
+                detail=f"Unsupported file type: {file_ext}. Supported types: PDF (.pdf), Excel (.xlsx, .xls), Images (.jpg, .png, etc.)"
             )
-        
-        # Forward to python-ocr-demo vision-extract endpoint
-        endpoint = f"{OCR_SERVICE_URL}/api/vision-extract"
-        logger.info(f"📄 Using vision-extract for PDF")
         
         files = {'file': (file.filename, file_content, file.content_type)}
         
@@ -82,18 +92,20 @@ async def extract_document(file: UploadFile = File(...)):
                 detail=result.get('error', 'Extraction failed')
             )
         
+        # Get highlighted items - python-ocr-demo returns 'agent_carrier_list'
+        highlighted_items = result.get('agent_carrier_list', result.get('highlighted_carriers', []))
+        
         logger.info(f"✅ Extraction completed successfully")
         logger.info(f"   - Form fields: {len(result.get('form_data', {}))}")
-        logger.info(f"   - Highlighted items: {len(result.get('highlighted_carriers', []))}")
+        logger.info(f"   - Highlighted items: {len(highlighted_items)}")
         
         # Transform response to match frontend expectations
         response_data = {
             "success": True,
             "filename": file.filename,
-            "extraction_method": result.get('extraction_method', 'claude_vision'),
             "data": {
                 "form_fields": result.get('form_data', {}),
-                "highlighted_items": result.get('highlighted_carriers', []),
+                "highlighted_items": highlighted_items,
                 "background_info": result.get('background_info', {}),
                 "signatures": result.get('signatures', {})
             },

@@ -129,8 +129,8 @@ export default function ActionPage() {
             <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/upload-document")}>
               <CardContent sx={{ textAlign: "center", py: 4 }}>
                 <CloudUpload sx={{ fontSize: 48, color: "#003366", mb: 1 }} />
-                <Typography variant="h6" fontWeight="600" color="text.primary">Upload PDF Document</Typography>
-                <Typography variant="body2" color="text.secondary">Extract data from PDF using AI</Typography>
+                <Typography variant="h6" fontWeight="600" color="text.primary">Upload Document</Typography>
+                <Typography variant="body2" color="text.secondary">Extract data from PDF, Excel, or Image using AI</Typography>
               </CardContent>
             </Card>
           </Box>

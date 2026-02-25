@@ -30,18 +30,18 @@ import {
   List,
   PersonAdd,
 } from "@mui/icons-material";
+import { api } from "~/lib/api";
 
 export function meta({}: Route.MetaArgs) {
   return [
     { title: "Upload Document" },
-    { name: "description", content: "Upload PDF to extract data" },
+    { name: "description", content: "Upload PDF, Excel, or Image to extract data" },
   ];
 }
 
 interface ExtractedData {
   success: boolean;
   filename: string;
-  extraction_method: string;
   data: {
     form_fields: Record<string, string>;
     highlighted_items: string[];
@@ -72,14 +72,23 @@ export default function UploadDocument() {
   // Track background info
   const [approvedBackgroundInfo, setApprovedBackgroundInfo] = useState<Set<string>>(new Set());
 
+  // Format snake_case and kebab-case to Title Case for display
+  const formatFieldName = (key: string): string => {
+    return key
+      .replace(/[-_]/g, ' ')  // Replace both dashes and underscores with spaces
+      .split(' ')
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(' ');
+  };
+
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      const validTypes = ['.pdf'];
+      const validTypes = ['.pdf', '.xlsx', '.xls', '.xlsm', '.xlsb', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'];
       const fileExt = '.' + file.name.split('.').pop()?.toLowerCase();
       
       if (!validTypes.includes(fileExt)) {
-        setError('Please upload a PDF file (.pdf)');
+        setError('Please upload a PDF, Excel, or Image file');
         return;
       }
 
@@ -97,11 +106,11 @@ export default function UploadDocument() {
     event.preventDefault();
     const file = event.dataTransfer.files[0];
     if (file) {
-      const validTypes = ['.pdf'];
+      const validTypes = ['.pdf', '.xlsx', '.xls', '.xlsm', '.xlsb', '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'];
       const fileExt = '.' + file.name.split('.').pop()?.toLowerCase();
       
       if (!validTypes.includes(fileExt)) {
-        setError('Please upload a PDF file (.pdf)');
+        setError('Please upload a PDF, Excel, or Image file');
         return;
       }
 
@@ -121,15 +130,10 @@ export default function UploadDocument() {
     formData.append('file', selectedFile);
 
     try {
-      const response = await fetch('http://localhost:8001/api/extract', {
-        method: 'POST',
-        body: formData,
-      });
+      const data = await api.postForm<ExtractedData>('/api/extract', formData);
 
-      const data = await response.json();
-
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Extraction failed');
+      if (!data.success) {
+        throw new Error('Extraction failed');
       }
 
       setExtractedData(data);
@@ -223,7 +227,7 @@ export default function UploadDocument() {
       <AppBar position="static" elevation={0} sx={{ bgcolor: "#003366" }}>
         <Toolbar>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700, color: "#fff" }}>
-            Upload PDF Document
+            Upload Document
           </Typography>
           <Button color="inherit" component={Link} to="/" startIcon={<List />}>
             Dashboard
@@ -244,10 +248,10 @@ export default function UploadDocument() {
         <Container maxWidth="lg" sx={{ py: 4 }}>
           <Box className="mb-6">
             <Typography variant="h4" fontWeight="bold" color="text.primary">
-              Upload PDF Document
+              Upload Document
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Upload a PDF file to extract structured data using AI
+              Upload a PDF, Excel, or Image file to extract structured data using AI
             </Typography>
           </Box>
 
@@ -255,7 +259,7 @@ export default function UploadDocument() {
         <Card className="mb-8">
           <CardContent>
             <Typography variant="h6" className="font-bold mb-6">
-              Upload PDF Document
+              Upload Document
             </Typography>
 
             <Box
@@ -275,16 +279,16 @@ export default function UploadDocument() {
               <input
                 id="file-input"
                 type="file"
-                accept=".pdf"
+                accept=".pdf,.xlsx,.xls,.xlsm,.xlsb,.jpg,.jpeg,.png,.gif,.bmp,.tiff,.webp"
                 onChange={handleFileSelect}
                 style={{ display: 'none' }}
               />
               <CloudUpload sx={{ fontSize: 48, color: '#003366', mb: 1 }} />
               <Typography variant="body1" className="font-semibold mb-1">
-                {selectedFile ? selectedFile.name : 'Drag & drop your PDF file here'}
+                {selectedFile ? selectedFile.name : 'Drag & drop your file here'}
               </Typography>
               <Typography variant="body2" className="text-gray-500">
-                or click to browse (PDF files only)
+                or click to browse (PDF, Excel, or Image files)
               </Typography>
             </Box>
 
@@ -361,7 +365,7 @@ export default function UploadDocument() {
                   <CardContent className="flex flex-col items-center gap-2">
                     <CheckCircle sx={{ fontSize: 32, color: '#4CAF50' }} />
                     <Typography variant="body2" className="text-gray-600">
-                      Highlighted Items
+                      Agent Carriers
                     </Typography>
                     <Typography variant="h4" className="font-bold">
                       {(extractedData.data.highlighted_items || []).length}
@@ -399,10 +403,6 @@ export default function UploadDocument() {
                   label={`Confidence: ${(extractedData.confidence * 100).toFixed(0)}%`}
                   color="success"
                 />
-                <Chip
-                  label={`Method: ${extractedData.extraction_method}`}
-                  variant="outlined"
-                />
               </Box>
 
               {/* Form Fields */}
@@ -429,7 +429,7 @@ export default function UploadDocument() {
                         disabled={approvedFields.size === 0}
                         sx={{ bgcolor: "#003366", '&:hover': { bgcolor: "#002244" } }}
                       >
-                        Export Approved
+                        Transfer Agents
                       </Button>
                     </Box>
                   </Box>
@@ -454,8 +454,8 @@ export default function UploadDocument() {
                             <Box className="flex justify-between items-start gap-2">
                               <Box className="flex-1">
                                 <Box className="flex items-center gap-2 mb-1">
-                                  <Typography variant="body2" className="font-medium text-gray-700">
-                                    {key}
+                                  <Typography variant="body2" fontWeight="600" color="text.primary">
+                                    {formatFieldName(key)}
                                   </Typography>
                                   {isModified && (
                                     <Chip label="Modified" size="small" color="info" />
@@ -535,12 +535,12 @@ export default function UploadDocument() {
                 </Box>
               )}
 
-              {/* Highlighted Items */}
+              {/* Agent Carriers */}
               {(extractedData.data.highlighted_items || []).length > 0 && (
                 <Box className="mb-4">
                   <Box className="flex justify-between items-center mb-2">
                     <Typography variant="subtitle1" className="font-semibold">
-                      Highlighted Items ({approvedHighlightedItems.size}/{extractedData.data.highlighted_items.length} approved)
+                      Agent Carriers ({approvedHighlightedItems.size}/{extractedData.data.highlighted_items.length} approved)
                     </Typography>
                     <Button
                       size="small"
@@ -618,8 +618,8 @@ export default function UploadDocument() {
                           <CardContent>
                             <Box className="flex justify-between items-center">
                               <Box className="flex-1">
-                                <Typography variant="body2" className="font-medium text-gray-700">
-                                  {key}:
+                                <Typography variant="body2" fontWeight="600" color="text.primary">
+                                  {formatFieldName(key)}:
                                 </Typography>
                                 <Box className="flex items-center gap-2 mt-1">
                                   <Typography variant="body2" className="text-gray-900">
