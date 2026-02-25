@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import uuid
@@ -7,7 +8,7 @@ from typing import Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from src.utils.database import get_db
@@ -157,6 +158,24 @@ def _advisor_to_dict(advisor: Any) -> dict:
     return d
 
 
+def _log_carrier_request_body(carrier_id: str, format_used: str, payload: dict, prefix: str = "BEDROCK") -> None:
+    """Log the carrier API request body for demo (Bedrock or direct builder). Truncate if very long."""
+    try:
+        body_str = json.dumps(payload, indent=2, default=str)
+    except (TypeError, ValueError):
+        body_str = str(payload)
+    max_len = 4000
+    if len(body_str) > max_len:
+        body_str = body_str[:max_len] + "\n... (truncated)"
+    logger.info(
+        "[%s] Carrier request body (carrier_id=%s, format=%s):\n%s",
+        prefix,
+        carrier_id,
+        format_used,
+        body_str,
+    )
+
+
 async def _build_payload_for_carrier(
     advisor: Any,
     carrier_id: str,
@@ -167,33 +186,61 @@ async def _build_payload_for_carrier(
     Build carrier request payload. Returns (payload, format_used, bedrock_used).
     format_used is 'custom_yaml' | 'flat' | 'nested'. Use Bedrock when custom YAML exists
     or when default template is nested (built-in nested YAML). Fall back to code builders otherwise.
+
+    Data sources (for demo / debugging):
+    - advisor: from json_store.get_advisor(advisor_id) or request body (create-and-transfer agent,
+      dispatch-all/submit advisor). Contains npn, first_name, last_name, email, phone, broker_dealer, license_states.
+    - submitted_states: from request (body.states in create-and-transfer, or per-carrier states in dispatch-all).
+    - YAML format: loaded at request time from carrier_formats_store.load_carrier_format(carrier_id),
+      which reads backend/local_data/carrier_formats/{carrier_id}.yaml. When a carrier format is added
+      or updated via POST /api/admin/carrier-formats/{carrier_id}, the next transfer request uses that YAML.
     """
     advisor_dict = _advisor_to_dict(advisor)
     default_tpl = get_default_template(carrier_id)
     format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
 
     if format_yaml:
-        logger.info("[CARRIER] Framing request for carrier_id=%s as format=custom_yaml (Bedrock + uploaded YAML)", carrier_id)
+        logger.info(
+            "[BEDROCK] Using Bedrock to build carrier request for carrier_id=%s (custom YAML from carrier format upload)",
+            carrier_id,
+        )
         transformed = await transform_to_carrier_format(
             carrier_id, format_yaml, advisor_dict, submitted_states
         )
         if transformed is not None:
-            logger.info("[CARRIER] Carrier %s payload shaped with keys: %s", carrier_id, list(transformed.keys())[:10])
+            logger.info(
+                "[BEDROCK] Bedrock transform succeeded for carrier_id=%s (custom_yaml), payload keys: %s",
+                carrier_id,
+                list(transformed.keys())[:10],
+            )
+            _log_carrier_request_body(carrier_id, "custom_yaml", transformed)
             return transformed, "custom_yaml", True
 
     if default_tpl == "nested":
-        logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (Bedrock + built-in YAML)", carrier_id)
+        logger.info(
+            "[BEDROCK] Using Bedrock to build carrier request for carrier_id=%s (built-in nested YAML)",
+            carrier_id,
+        )
         nested_payload = await transform_to_carrier_format(
             carrier_id, BUILTIN_NESTED_FORMAT_YAML, advisor_dict, submitted_states
         )
         if nested_payload is not None:
-            logger.info("[CARRIER] Carrier %s payload shaped with keys: %s", carrier_id, list(nested_payload.keys())[:10])
+            logger.info(
+                "[BEDROCK] Bedrock transform succeeded for carrier_id=%s (nested), payload keys: %s",
+                carrier_id,
+                list(nested_payload.keys())[:10],
+            )
+            _log_carrier_request_body(carrier_id, "nested", nested_payload)
             return nested_payload, "nested", True
-        logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (direct builder, no Bedrock)", carrier_id)
-        return build_nested_payload(advisor_dict, carrier_id, submitted_states), "nested", False
+        logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (direct builder, Bedrock unavailable)", carrier_id)
+        nested_direct = build_nested_payload(advisor_dict, carrier_id, submitted_states)
+        _log_carrier_request_body(carrier_id, "nested", nested_direct, prefix="CARRIER")
+        return nested_direct, "nested", False
 
-    logger.info("[CARRIER] Framing request for carrier_id=%s as format=flat (direct builder)", carrier_id)
-    return build_flat_payload(advisor_dict, carrier_id, submitted_states), "flat", False
+    logger.info("[CARRIER] Framing request for carrier_id=%s as format=flat (direct builder, no Bedrock)", carrier_id)
+    flat_payload = build_flat_payload(advisor_dict, carrier_id, submitted_states)
+    _log_carrier_request_body(carrier_id, "flat", flat_payload, prefix="CARRIER")
+    return flat_payload, "flat", False
 
 @router.post("/advisors/upload")
 async def upload_advisor(
@@ -277,7 +324,7 @@ async def create_advisor(body: AdvisorCreateRequest, db: Session = Depends(get_d
 
 
 @router.post("/create-and-transfer")
-async def create_agent_and_transfer(body: CreateAndTransferRequest):
+async def create_agent_and_transfer(body: CreateAndTransferRequest, background_tasks: BackgroundTasks):
     """
     Create a new agent and immediately submit transfer requests: one per (carrier, state).
     Requires USE_JSON_STORE=true. Agent details + carriers + states in one request.
@@ -324,13 +371,13 @@ async def create_agent_and_transfer(body: CreateAndTransferRequest):
             )
             submission_ids.append(submission_id)
 
-    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
+    background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
     return {
         "success": True,
         "advisor_id": advisor_id,
         "submission_ids": submission_ids,
-        "status": "sent_to_carrier",
+        "status": "queued",
     }
 
 
@@ -463,6 +510,7 @@ async def get_advisor(
 async def dispatch_advisor_to_all_carriers(
     advisor_id: str,
     body: DispatchAllCarriersRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if db is None:
@@ -538,20 +586,21 @@ async def dispatch_advisor_to_all_carriers(
                 submission_ids.append(str(submission.id))
 
     carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
-    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
+    background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
     return {
         "success": True,
         "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
         "carrier_base_url": carrier_base_url,
         "submission_ids": submission_ids,
-        "status": "sent_to_carrier",
+        "status": "queued",
     }
 
 
 @router.post("/carriers/payloads")
 async def upload_carrier_payload(
     body: CarrierPayloadUploadRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if db is not None:
@@ -583,7 +632,7 @@ async def upload_carrier_payload(
 
     if body.dispatch_now:
         carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
-        await dispatch_carrier_submissions([submission_id], carrier_base_url)
+        background_tasks.add_task(dispatch_carrier_submissions, [submission_id], carrier_base_url)
 
     return {
         "success": True,
@@ -591,7 +640,7 @@ async def upload_carrier_payload(
         "advisor_id": body.advisor_id,
         "carrier_id": body.carrier_id,
         "payload_file": payload_file,
-        "status": "sent_to_carrier" if body.dispatch_now else "submitted",
+        "status": "queued" if body.dispatch_now else "submitted",
     }
 
 
@@ -599,6 +648,7 @@ async def upload_carrier_payload(
 async def submit_advisor_to_carrier(
     advisor_id: str,
     body: CarrierSubmissionCreateRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if db is None:
@@ -664,14 +714,14 @@ async def submit_advisor_to_carrier(
             submission_ids.append(str(submission.id))
 
     carrier_base_url = os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
-    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
+    background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
     return {
         "success": True,
         "submission_ids": submission_ids,
         "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
         "carrier_id": body.carrier_id,
-        "status": "sent_to_carrier",
+        "status": "queued",
     }
 
 

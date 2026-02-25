@@ -1,5 +1,11 @@
 # Advisor Onboarding API
 
+## Restart backend and frontend
+
+- **Backend:** In a terminal, run the server so logs are visible (see [Run locally](#run-locally) below). All `[CARRIER]` and `[BEDROCK]` logs appear in this terminal.
+- **Frontend:** In another terminal: `cd frontend && npm run dev` → app at http://localhost:5173.
+- **Full testing steps and how to view logs (flat vs custom YAML, Bedrock):** see **[TESTING.md](TESTING.md)**.
+
 ## Run locally
 
 1. **Create venv and install dependencies** (first time only):
@@ -98,10 +104,41 @@ Use **`carrier_format_examples/bedrock-test-format.yaml`**. That YAML describes 
 
 Other example YAMLs: `carrier-a.example.yaml` (flat shape), `carrier-b.example.yaml` (nested shape: meta/agent/appointment).
 
+## Async carrier dispatch (background only)
+
+Carrier API calls run **only in the background**. Create-and-transfer, dispatch-all, and submit return immediately with `status: "queued"` and `submission_ids`; the actual HTTP calls to the carrier happen asynchronously.
+
+**How to test:**
+
+1. Start the backend with logs visible: `USE_JSON_STORE=true .venv/bin/uvicorn src.main:app --reload --host 0.0.0.0 --port 8000`
+2. Create a transfer (e.g. from the UI **Create agent & transfer** or curl below). The API returns right away with `"status": "queued"`.
+3. Watch the **server logs**: you’ll see `[CARRIER] Dispatch started`, then `[CARRIER] Hitting carrier API: POST ...` for each submission. For carriers using **custom YAML** or **nested (Bedrock)** you’ll see `[BEDROCK] Using Bedrock to build carrier request...` and `[BEDROCK] Invoking Claude...` before the carrier call.
+4. Poll submissions: `GET /api/admin/carrier-submissions` — status moves from `queued` to `sent_to_carrier` (or `error`) as the background task runs.
+
+**Example (create-and-transfer, async):**
+```bash
+curl -s -X POST http://localhost:8000/api/admin/create-and-transfer \
+  -H "Content-Type: application/json" \
+  -d '{"agent":{"npn":"99999","first_name":"Demo","last_name":"User","email":"d@e.com","phone":"555-0000","broker_dealer":"BD","license_states":["CA","TX"]},"carriers":["1","2","3"],"states":["CA"]}'
+```
+Response is immediate with `"status": "queued"`. Check logs for `[BEDROCK]` when carrier 2 (nested) or 3 (if custom YAML uploaded) is processed.
+
+## Data sources for carrier request payload (demo)
+
+When a **transfer request is created** (create-and-transfer, dispatch-all, or submit), the payload sent to the carrier is built from:
+
+| Source | Where it comes from |
+|--------|---------------------|
+| **Advisor data** | `json_store.get_advisor(advisor_id)` (or the advisor from the request). Fields: `npn`, `first_name`, `last_name`, `email`, `phone`, `broker_dealer`, `license_states`. |
+| **Submitted states** | Request body: `body.states` in create-and-transfer, or per-carrier `submitted_states` in dispatch-all/submit. |
+| **YAML format** | Loaded **at request time** from `carrier_formats_store.load_carrier_format(carrier_id)` → reads `backend/local_data/carrier_formats/{carrier_id}.yaml`. |
+
+So: **add or update a carrier format (YAML) before creating a transfer**; the next transfer that includes that carrier will use the current YAML from disk. No restart needed. For carriers with custom YAML, Bedrock is invoked with that YAML + advisor + states to produce the JSON request body; for flat/nested without custom YAML, the built-in builders (or Bedrock with built-in nested YAML) are used.
+
 ## Environment
 
 - `USE_JSON_STORE` — set to `true` (default) to use local JSON files under `local_data/`; set to `false` to use a database (set `DATABASE_URL`).
 - `S3_BUCKET` — optional; if set, advisor file uploads go to S3; if unset, uploads are stored under `local_data/uploads/` for local dev.
 - `CARRIER_BASE_URL` — base URL for carrier API calls (default: http://localhost:8000).
-- `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform (default: `anthropic.claude-3-5-sonnet-v2:0`).
+- `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform. If you see "on-demand throughput isn't supported", your account may require an **inference profile** ARN instead of the model ID (set this env to the profile ARN from the Bedrock console). The code will try fallback models and log at INFO when one succeeds.
 - `AWS_REGION` — used for Bedrock (default: us-east-1).

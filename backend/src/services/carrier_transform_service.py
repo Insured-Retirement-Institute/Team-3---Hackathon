@@ -114,12 +114,22 @@ def _invoke_claude(system_prompt: str, user_content: str) -> str:
             result = json.loads(response["body"].read())
             for block in result.get("content", []):
                 if block.get("type") == "text":
-                    return block.get("text", "").strip()
+                    text = block.get("text", "").strip()
+                    if text and model_id != BEDROCK_MODEL_ID:
+                        logger.info(
+                            "[BEDROCK] Using fallback model %s (primary not available for on-demand in this account)",
+                            model_id,
+                        )
+                    return text
             return ""
         except Exception as e:
             last_error = e
             if "ValidationException" in type(e).__name__ or "invalid" in str(e).lower():
-                logger.warning("Model %s failed (%s), trying fallback", model_id, e)
+                logger.info(
+                    "Model %s not available (%s), trying next",
+                    model_id,
+                    "on-demand not supported" if "on-demand" in str(e) else str(e)[:80],
+                )
                 continue
             raise
     if last_error:
@@ -192,6 +202,7 @@ Produce the carrier API request body as a single JSON object:"""
 
     global _last_transform_error
     _last_transform_error = None
+    logger.info("[BEDROCK] Invoking Claude for carrier_id=%s (YAML-driven request body)", carrier_id)
     try:
         out = _invoke_claude(system_prompt, user_content)
         if not out:
