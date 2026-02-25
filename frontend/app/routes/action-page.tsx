@@ -44,8 +44,8 @@ export default function ActionPage() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700, color: "#fff" }}>
             Agent Transfer Request
           </Typography>
-          <Button color="inherit" component={Link} to="/request" startIcon={<AddCircle />}>
-            New request
+          <Button color="inherit" component={Link} to="/create-and-transfer" startIcon={<AddCircle />}>
+            Transfer agent
           </Button>
           <Button color="inherit" component={Link} to="/advisors/new" startIcon={<PersonAdd />}>
             New agent

@@ -53,7 +53,7 @@ def build_nested_payload(advisor: dict[str, Any], carrier_id: str, states: list[
 
 
 async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_url: str) -> None:
-    logger.info("Dispatch started for %s submission(s), base_url=%s", len(submission_ids), carrier_base_url)
+    logger.info("[CARRIER] Dispatch started: %s submission(s), base_url=%s", len(submission_ids), carrier_base_url)
     use_json_store = os.getenv("USE_JSON_STORE", "true").lower() in {"1", "true", "yes"}
     if use_json_store:
         async with httpx.AsyncClient(base_url=carrier_base_url, timeout=30.0) as client:
@@ -78,23 +78,32 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     path = "/api/carrier/dummy/1/appointments"
                 elif carrier_format == "nested":
                     path = "/api/carrier/dummy/2/appointments"
+                elif carrier_format == "custom_yaml":
+                    path = "/api/carrier/appointments"
                 else:
                     json_store.update_submission(submission_id, {"status": "error", "error_message": f"Unknown carrier_format: {carrier_format}"})
                     continue
 
+                full_url = carrier_base_url.rstrip("/") + path
+                cid = submission.get("carrier_id")
                 logger.info(
-                    "Dispatching submission=%s carrier=%s format=%s -> %s%s",
-                    submission.get("id"),
-                    submission.get("carrier_id"),
+                    "[CARRIER] Hitting carrier API: POST %s (carrier_id=%s, format=%s)",
+                    full_url,
+                    cid,
                     carrier_format,
-                    carrier_base_url,
-                    path,
                 )
 
                 try:
                     resp = await client.post(path, json=payload)
                     resp.raise_for_status()
                     resp_json = resp.json()
+                    logger.info(
+                        "[CARRIER] Carrier API responded: %s carrier_id=%s status=%s keys=%s",
+                        path,
+                        cid,
+                        resp.status_code,
+                        list(resp_json.keys()) if isinstance(resp_json, dict) else resp_json,
+                    )
 
                     response_data: dict[str, Any] = submission.get("response_data") or {}
                     response_data["carrier_api_response"] = resp_json
@@ -156,6 +165,8 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     path = "/api/carrier/dummy/1/appointments"
                 elif carrier_format == "nested":
                     path = "/api/carrier/dummy/2/appointments"
+                elif carrier_format == "custom_yaml":
+                    path = "/api/carrier/appointments"
                 else:
                     submission.status = "error"
                     submission.error_message = f"Unknown carrier_format: {carrier_format}"
@@ -163,12 +174,25 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     db.commit()
                     continue
 
-                logger.info("Dispatching submission=%s carrier=%s format=%s -> %s%s", submission.id, submission.carrier_name, carrier_format, carrier_base_url, path)
+                full_url = carrier_base_url.rstrip("/") + path
+                logger.info(
+                    "[CARRIER] Hitting carrier API: POST %s (carrier_id=%s, format=%s)",
+                    full_url,
+                    submission.carrier_name,
+                    carrier_format,
+                )
 
                 try:
                     resp = await client.post(path, json=payload)
                     resp.raise_for_status()
                     resp_json = resp.json()
+                    logger.info(
+                        "[CARRIER] Carrier API responded: %s carrier_id=%s status=%s keys=%s",
+                        path,
+                        submission.carrier_name,
+                        resp.status_code,
+                        list(resp_json.keys()) if isinstance(resp_json, dict) else resp_json,
+                    )
 
                     response_data: dict[str, Any] = submission.response_data or {}
                     response_data["carrier_api_response"] = resp_json
@@ -177,8 +201,6 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
 
                     submission.status = "sent_to_carrier"
                     submission.error_message = None
-
-                    logger.info("Carrier response submission=%s status=%s", submission.id, submission.status)
                 except Exception as e:
                     submission.status = "error"
                     submission.error_message = str(e)

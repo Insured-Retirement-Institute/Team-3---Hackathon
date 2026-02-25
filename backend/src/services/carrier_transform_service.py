@@ -13,9 +13,40 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Default Bedrock Claude model (3.5 Sonnet; use env for 4.5 or other variants)
-BEDROCK_MODEL_ID = os.getenv("BEDROCK_CLAUDE_MODEL_ID", "anthropic.claude-3-5-sonnet-v2:0")
+# Default Bedrock Claude model (use env to override). Fallback list if primary is invalid in account.
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_CLAUDE_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+BEDROCK_MODEL_FALLBACKS = [
+    "anthropic.claude-3-5-haiku-20241022-v1:0",
+    "anthropic.claude-3-haiku-20240307-v1:0",
+]
 BEDROCK_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+# Built-in nested format YAML (meta/agent/appointment) so Bedrock can generate nested payloads too
+BUILTIN_NESTED_FORMAT_YAML = """
+meta:
+  carrier_id: string
+agent:
+  advisor_id: string
+  npn: string
+  name:
+    first: string
+    last: string
+  contacts:
+    - type: email
+      value: string
+    - type: phone
+      value: string
+  broker_dealer: string
+  license_states: list of strings
+appointment:
+  states: list of state codes
+""".strip()
+
+
+# Store last error for debugging (e.g. NoCredentialsError, AccessDenied)
+_last_bedrock_error: Optional[str] = None
+# Store last error from invoke/transform (e.g. AccessDeniedException, ValidationException)
+_last_transform_error: Optional[str] = None
 
 
 def _get_bedrock_runtime():
@@ -24,11 +55,41 @@ def _get_bedrock_runtime():
 
 
 def _bedrock_available() -> bool:
+    global _last_bedrock_error
+    _last_bedrock_error = None
     try:
         _get_bedrock_runtime()
         return True
-    except Exception:
+    except Exception as e:
+        _last_bedrock_error = f"{type(e).__name__}: {str(e)}"
+        logger.warning("Bedrock unavailable: %s", _last_bedrock_error)
         return False
+
+
+def get_bedrock_debug_info() -> dict:
+    """Return info for debugging Bedrock connectivity (no secrets). Performs a fresh client check."""
+    global _last_bedrock_error
+    info = {
+        "aws_access_key_id_set": bool(os.getenv("AWS_ACCESS_KEY_ID")),
+        "aws_secret_access_key_set": bool(os.getenv("AWS_SECRET_ACCESS_KEY")),
+        "aws_region": BEDROCK_REGION,
+        "bedrock_model_id": BEDROCK_MODEL_ID,
+        "bedrock_client_ok": False,
+        "bedrock_error": None,
+    }
+    try:
+        _get_bedrock_runtime()
+        info["bedrock_client_ok"] = True
+        _last_bedrock_error = None
+    except Exception as e:
+        _last_bedrock_error = f"{type(e).__name__}: {str(e)}"
+        info["bedrock_error"] = _last_bedrock_error
+    return info
+
+
+def get_last_transform_error() -> Optional[str]:
+    """Return the last error from transform_to_carrier_format (invoke_model or parse failure)."""
+    return _last_transform_error
 
 
 def _invoke_claude(system_prompt: str, user_content: str) -> str:
@@ -40,16 +101,29 @@ def _invoke_claude(system_prompt: str, user_content: str) -> str:
         "system": system_prompt,
         "messages": [{"role": "user", "content": user_content}],
     }
-    response = client.invoke_model(
-        modelId=BEDROCK_MODEL_ID,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps(body),
-    )
-    result = json.loads(response["body"].read())
-    for block in result.get("content", []):
-        if block.get("type") == "text":
-            return block.get("text", "").strip()
+    model_ids = [BEDROCK_MODEL_ID] + [m for m in BEDROCK_MODEL_FALLBACKS if m != BEDROCK_MODEL_ID]
+    last_error = None
+    for model_id in model_ids:
+        try:
+            response = client.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps(body),
+            )
+            result = json.loads(response["body"].read())
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    return block.get("text", "").strip()
+            return ""
+        except Exception as e:
+            last_error = e
+            if "ValidationException" in type(e).__name__ or "invalid" in str(e).lower():
+                logger.warning("Model %s failed (%s), trying fallback", model_id, e)
+                continue
+            raise
+    if last_error:
+        raise last_error
     return ""
 
 
@@ -116,6 +190,8 @@ Source data:
 
 Produce the carrier API request body as a single JSON object:"""
 
+    global _last_transform_error
+    _last_transform_error = None
     try:
         out = _invoke_claude(system_prompt, user_content)
         if not out:
@@ -127,5 +203,6 @@ Produce the carrier API request body as a single JSON object:"""
             return None
         return payload
     except Exception as e:
+        _last_transform_error = f"{type(e).__name__}: {str(e)}"
         logger.exception("Bedrock transform failed for carrier %s: %s", carrier_id, e)
         return None

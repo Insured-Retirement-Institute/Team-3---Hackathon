@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
+logger = logging.getLogger(__name__)
+
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from src.utils.database import get_db
@@ -12,7 +15,12 @@ from src.models.advisor import Advisor
 from src.models.advisor import CarrierSubmission
 from src.services.ai_service import AIService
 from src.services.carrier_dispatcher import dispatch_carrier_submissions, build_flat_payload, build_nested_payload
-from src.services.carrier_transform_service import transform_to_carrier_format
+from src.services.carrier_transform_service import (
+    transform_to_carrier_format,
+    get_bedrock_debug_info,
+    get_last_transform_error,
+    BUILTIN_NESTED_FORMAT_YAML,
+)
 from src.utils import json_store
 from src.utils import carrier_formats as carrier_formats_store
 from src.utils.carrier_registry import (
@@ -57,6 +65,14 @@ class CarrierDispatchTarget(BaseModel):
 
 class DispatchAllCarriersRequest(BaseModel):
     carriers: List[CarrierDispatchTarget] = Field(default_factory=list)
+    carrier_base_url: Optional[str] = None
+
+
+class CreateAndTransferRequest(BaseModel):
+    """One-shot: create agent and transfer to selected carriers and states. One submission per (carrier, state)."""
+    agent: AdvisorCreateRequest
+    carriers: List[str] = Field(default_factory=list, description="Carrier IDs e.g. ['1','2','3']")
+    states: List[str] = Field(default_factory=list, description="State codes e.g. ['AL','CA']")
     carrier_base_url: Optional[str] = None
 
 
@@ -130,19 +146,38 @@ async def _build_payload_for_carrier(
     carrier_id: str,
     carrier_format: str,
     submitted_states: List[str],
-) -> dict:
-    """Build carrier request payload: use YAML + Bedrock transform if format exists, else built-in builders."""
+) -> tuple[dict, str, bool]:
+    """
+    Build carrier request payload. Returns (payload, format_used, bedrock_used).
+    format_used is 'custom_yaml' | 'flat' | 'nested'. Use Bedrock when custom YAML exists
+    or when default template is nested (built-in nested YAML). Fall back to code builders otherwise.
+    """
     advisor_dict = _advisor_to_dict(advisor)
+    default_tpl = get_default_template(carrier_id)
     format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
+
     if format_yaml:
+        logger.info("[CARRIER] Framing request for carrier_id=%s as format=custom_yaml (Bedrock + uploaded YAML)", carrier_id)
         transformed = await transform_to_carrier_format(
             carrier_id, format_yaml, advisor_dict, submitted_states
         )
         if transformed is not None:
-            return transformed
-    if carrier_format == "flat":
-        return build_flat_payload(advisor_dict, carrier_id, submitted_states)
-    return build_nested_payload(advisor_dict, carrier_id, submitted_states)
+            logger.info("[CARRIER] Carrier %s payload shaped with keys: %s", carrier_id, list(transformed.keys())[:10])
+            return transformed, "custom_yaml", True
+
+    if default_tpl == "nested":
+        logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (Bedrock + built-in YAML)", carrier_id)
+        nested_payload = await transform_to_carrier_format(
+            carrier_id, BUILTIN_NESTED_FORMAT_YAML, advisor_dict, submitted_states
+        )
+        if nested_payload is not None:
+            logger.info("[CARRIER] Carrier %s payload shaped with keys: %s", carrier_id, list(nested_payload.keys())[:10])
+            return nested_payload, "nested", True
+        logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (direct builder, no Bedrock)", carrier_id)
+        return build_nested_payload(advisor_dict, carrier_id, submitted_states), "nested", False
+
+    logger.info("[CARRIER] Framing request for carrier_id=%s as format=flat (direct builder)", carrier_id)
+    return build_flat_payload(advisor_dict, carrier_id, submitted_states), "flat", False
 
 @router.post("/advisors/upload")
 async def upload_advisor(
@@ -225,6 +260,64 @@ async def create_advisor(body: AdvisorCreateRequest, db: Session = Depends(get_d
     return {"success": True, "advisor_id": str(advisor.id)}
 
 
+@router.post("/create-and-transfer")
+async def create_agent_and_transfer(body: CreateAndTransferRequest):
+    """
+    Create a new agent and immediately submit transfer requests: one per (carrier, state).
+    Requires USE_JSON_STORE=true. Agent details + carriers + states in one request.
+    """
+    use_json = os.getenv("USE_JSON_STORE", "true").lower() in {"1", "true", "yes"}
+    if not use_json:
+        raise HTTPException(400, "create-and-transfer is only supported when USE_JSON_STORE=true")
+    try:
+        advisor_id = json_store.create_advisor(body.agent.model_dump())
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    advisor = json_store.get_advisor(advisor_id)
+    if not advisor:
+        raise HTTPException(500, "Advisor created but not found")
+
+    carrier_ids = body.carriers or ["1", "2"]
+    states_list = body.states or ["CA", "TX"]
+    carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
+
+    submission_ids: List[str] = []
+    for carrier_id in carrier_ids:
+        carrier_format = get_default_template(carrier_id)
+        if carrier_format == "nested":
+            carrier_format = "nested"
+        else:
+            carrier_format = "flat"
+        for one_state in states_list:
+            submitted_states_single = [one_state]
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, carrier_id, carrier_format, submitted_states_single
+            )
+            submission_id = json_store.create_submission(
+                {
+                    "advisor_id": str(advisor.get("id")),
+                    "carrier_id": carrier_id,
+                    "integration_method": "api",
+                    "status": "queued",
+                    "request_data": {
+                        "carrier_format": format_used,
+                        "payload": payload,
+                        "submitted_states": submitted_states_single,
+                    },
+                }
+            )
+            submission_ids.append(submission_id)
+
+    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
+
+    return {
+        "success": True,
+        "advisor_id": advisor_id,
+        "submission_ids": submission_ids,
+        "status": "sent_to_carrier",
+    }
+
+
 @router.get("/advisors")
 async def list_advisors(
     status: Optional[str] = None,
@@ -290,6 +383,12 @@ async def seed_advisors(db: Session = Depends(get_db)):
     return {"success": True, "created": len(created), "advisors": created}
 
 
+@router.get("/debug/bedrock")
+async def debug_bedrock():
+    """Check why Bedrock might not be running: env vars (set/not set), region, and last error from boto3. No secrets returned."""
+    return get_bedrock_debug_info()
+
+
 @router.get("/advisors/{advisor_id}")
 async def get_advisor(
     advisor_id: str,
@@ -348,7 +447,6 @@ async def get_advisor(
 async def dispatch_advisor_to_all_carriers(
     advisor_id: str,
     body: DispatchAllCarriersRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if db is None:
@@ -373,67 +471,71 @@ async def dispatch_advisor_to_all_carriers(
         ]
 
     submission_ids: List[str] = []
-    for c in carriers:
+    states_per_carrier = [c.submitted_states or [] for c in carriers]
+    if not any(states_per_carrier):
+        states_per_carrier = [["CA", "TX"]] * len(carriers)  # default
+
+    for c, states_list in zip(carriers, states_per_carrier):
         carrier_format = (c.carrier_format or "").lower()
         if carrier_format not in {"flat", "nested"}:
             raise HTTPException(400, "carrier_format must be flat or nested")
+        states_to_use = states_list if states_list else ["CA", "TX"]
 
-        if db is None:
-            payload = await _build_payload_for_carrier(
-                advisor, c.carrier_id, carrier_format, c.submitted_states
-            )
-            submission_id = json_store.create_submission(
-                {
-                    "advisor_id": str(advisor.get("id")),
-                    "carrier_id": c.carrier_id,
-                    "integration_method": c.integration_method,
-                    "status": "queued",
-                    "request_data": {
-                        "carrier_format": carrier_format,
-                        "payload": payload,
-                        "submitted_states": c.submitted_states,
-                    },
-                }
-            )
-            submission_ids.append(submission_id)
-        else:
-            if carrier_format == "flat":
-                payload = _carrier_payload_flat(advisor, c.carrier_id, c.submitted_states)
+        for one_state in states_to_use:
+            submitted_states_single = [one_state]
+            if db is None:
+                payload, format_used, _ = await _build_payload_for_carrier(
+                    advisor, c.carrier_id, carrier_format, submitted_states_single
+                )
+                submission_id = json_store.create_submission(
+                    {
+                        "advisor_id": str(advisor.get("id")),
+                        "carrier_id": c.carrier_id,
+                        "integration_method": c.integration_method,
+                        "status": "queued",
+                        "request_data": {
+                            "carrier_format": format_used,
+                            "payload": payload,
+                            "submitted_states": submitted_states_single,
+                        },
+                    }
+                )
+                submission_ids.append(submission_id)
             else:
-                payload = _carrier_payload_nested(advisor, c.carrier_id, c.submitted_states)
-
-            submission = CarrierSubmission(
-                advisor_id=advisor.id,
-                carrier_name=c.carrier_id,
-                integration_method=c.integration_method,
-                status="queued",
-                request_data={
-                    "carrier_format": carrier_format,
-                    "payload": payload,
-                    "submitted_states": c.submitted_states,
-                },
-            )
-            db.add(submission)
-            db.commit()
-            db.refresh(submission)
-            submission_ids.append(str(submission.id))
+                payload, format_used, _ = await _build_payload_for_carrier(
+                    advisor, c.carrier_id, carrier_format, submitted_states_single
+                )
+                submission = CarrierSubmission(
+                    advisor_id=advisor.id,
+                    carrier_name=c.carrier_id,
+                    integration_method=c.integration_method,
+                    status="queued",
+                    request_data={
+                        "carrier_format": format_used,
+                        "payload": payload,
+                        "submitted_states": submitted_states_single,
+                    },
+                )
+                db.add(submission)
+                db.commit()
+                db.refresh(submission)
+                submission_ids.append(str(submission.id))
 
     carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
-    background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
+    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
 
     return {
         "success": True,
         "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
         "carrier_base_url": carrier_base_url,
         "submission_ids": submission_ids,
-        "status": "queued",
+        "status": "sent_to_carrier",
     }
 
 
 @router.post("/carriers/payloads")
 async def upload_carrier_payload(
     body: CarrierPayloadUploadRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     if db is not None:
@@ -465,7 +567,7 @@ async def upload_carrier_payload(
 
     if body.dispatch_now:
         carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
-        background_tasks.add_task(dispatch_carrier_submissions, [submission_id], carrier_base_url)
+        await dispatch_carrier_submissions([submission_id], carrier_base_url)
 
     return {
         "success": True,
@@ -473,7 +575,7 @@ async def upload_carrier_payload(
         "advisor_id": body.advisor_id,
         "carrier_id": body.carrier_id,
         "payload_file": payload_file,
-        "status": "queued" if body.dispatch_now else "submitted",
+        "status": "sent_to_carrier" if body.dispatch_now else "submitted",
     }
 
 
@@ -501,61 +603,59 @@ async def submit_advisor_to_carrier(
     if carrier_format not in {"flat", "nested"}:
         raise HTTPException(400, "carrier_format must be flat or nested")
 
-    if db is None:
-        payload = await _build_payload_for_carrier(
-            advisor, body.carrier_id, carrier_format, body.submitted_states
-        )
-        submission_id = json_store.create_submission(
-            {
-                "advisor_id": str(advisor.get("id")),
-                "carrier_id": body.carrier_id,
-                "integration_method": body.integration_method,
-                "status": "submitted",
-                "request_data": {
-                    "carrier_format": carrier_format,
+    states_to_use = body.submitted_states or ["CA", "TX"]
+    submission_ids: List[str] = []
+
+    for one_state in states_to_use:
+        submitted_states_single = [one_state]
+        if db is None:
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, body.carrier_id, carrier_format, submitted_states_single
+            )
+            submission_id = json_store.create_submission(
+                {
+                    "advisor_id": str(advisor.get("id")),
+                    "carrier_id": body.carrier_id,
+                    "integration_method": body.integration_method,
+                    "status": "queued",
+                    "request_data": {
+                        "carrier_format": format_used,
+                        "payload": payload,
+                        "submitted_states": submitted_states_single,
+                    },
+                }
+            )
+            submission_ids.append(submission_id)
+        else:
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, body.carrier_id, carrier_format, submitted_states_single
+            )
+            submission = CarrierSubmission(
+                advisor_id=advisor.id,
+                carrier_name=body.carrier_id,
+                integration_method=body.integration_method,
+                status="queued",
+                request_data={
+                    "carrier_format": format_used,
                     "payload": payload,
-                    "submitted_states": body.submitted_states,
+                    "submitted_states": submitted_states_single,
                 },
-            }
-        )
+                submitted_at=None,
+            )
+            db.add(submission)
+            db.commit()
+            db.refresh(submission)
+            submission_ids.append(str(submission.id))
 
-        return {
-            "success": True,
-            "submission_id": submission_id,
-            "advisor_id": str(advisor.get("id")),
-            "carrier_id": body.carrier_id,
-            "status": "submitted",
-            "payload": payload,
-        }
-
-    if carrier_format == "flat":
-        payload = _carrier_payload_flat(advisor, body.carrier_id, body.submitted_states)
-    else:
-        payload = _carrier_payload_nested(advisor, body.carrier_id, body.submitted_states)
-
-    submission = CarrierSubmission(
-        advisor_id=advisor.id,
-        carrier_name=body.carrier_id,
-        integration_method=body.integration_method,
-        status="submitted",
-        request_data={
-            "carrier_format": carrier_format,
-            "payload": payload,
-            "submitted_states": body.submitted_states,
-        },
-        submitted_at=None,
-    )
-    db.add(submission)
-    db.commit()
-    db.refresh(submission)
+    carrier_base_url = os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
+    await dispatch_carrier_submissions(submission_ids, carrier_base_url)
 
     return {
         "success": True,
-        "submission_id": str(submission.id),
-        "advisor_id": str(submission.advisor_id),
-        "carrier_id": submission.carrier_name,
-        "status": submission.status,
-        "payload": payload,
+        "submission_ids": submission_ids,
+        "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
+        "carrier_id": body.carrier_id,
+        "status": "sent_to_carrier",
     }
 
 
@@ -707,7 +807,7 @@ class TestTransformRequest(BaseModel):
 async def test_transform_payload(body: TestTransformRequest, db: Session = Depends(get_db)):
     """
     Run the payload build synchronously (no submit). Returns the JSON that would be sent to the carrier.
-    Use this to compare standard vs custom YAML outputs without waiting for async dispatch.
+    Uses the same logic as submit/dispatch: custom YAML + Bedrock, or built-in nested via Bedrock, or flat/nested code builders.
     """
     if db is None:
         advisor = json_store.get_advisor(body.advisor_id)
@@ -731,41 +831,25 @@ async def test_transform_payload(body: TestTransformRequest, db: Session = Depen
         }
     if not advisor:
         raise HTTPException(404, "Advisor not found")
-    advisor_dict = _advisor_to_dict(advisor)
     states = body.states or []
     carrier_id = body.carrier_id.strip() or "1"
-    format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
-    format_used = "flat"
-    custom_yaml_uploaded = bool(format_yaml)
-    if format_yaml:
-        transformed = await transform_to_carrier_format(
-            carrier_id, format_yaml, advisor_dict, states
-        )
-        if transformed is not None:
-            return {
-                "success": True,
-                "payload": transformed,
-                "format_used": "custom_yaml",
-                "carrier_id": carrier_id,
-                "custom_yaml_uploaded": True,
-                "bedrock_used": True,
-            }
     default_tpl = get_default_template(carrier_id)
-    if default_tpl == "nested":
-        format_used = "nested"
-        payload = build_nested_payload(advisor_dict, carrier_id, states)
-    else:
-        payload = build_flat_payload(advisor_dict, carrier_id, states)
+    payload, format_used, bedrock_used = await _build_payload_for_carrier(
+        advisor, carrier_id, default_tpl, states
+    )
+    custom_yaml_uploaded = bool(carrier_formats_store.load_carrier_format(carrier_id))
+    bedrock_error = get_last_transform_error() if (custom_yaml_uploaded and not bedrock_used) else None
     return {
         "success": True,
         "payload": payload,
         "format_used": format_used,
         "carrier_id": carrier_id,
         "custom_yaml_uploaded": custom_yaml_uploaded,
-        "bedrock_used": False,
+        "bedrock_used": bedrock_used,
         "message": "Custom YAML is configured for this carrier but Bedrock did not run (check AWS credentials and region). Showing default payload."
-        if custom_yaml_uploaded
+        if (custom_yaml_uploaded and not bedrock_used)
         else None,
+        "bedrock_error": bedrock_error,
     }
 
 

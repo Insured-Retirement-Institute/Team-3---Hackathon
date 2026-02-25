@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -141,6 +141,20 @@ async def dummy_carrier_2_appointments(req: CarrierBAppointmentRequest):
         meta={"carrier_id": carrier_id, "carrier_tracking_id": tracking_id},
         result={"status": "submitted", "accepted_states": requested_states},
     )
+
+
+@router.post("/appointments")
+async def carrier_appointments_custom(payload: Dict[str, Any] = Body(...)):
+    """
+    Accept any JSON payload (custom YAML / Bedrock-generated format).
+    Used when request_data.carrier_format is 'custom_yaml'. Returns a generic success response.
+    """
+    tracking_id = f"custom-{uuid.uuid4().hex[:10]}"
+    return {
+        "carrier_tracking_id": tracking_id,
+        "status": "submitted",
+        "message": "Custom format payload received",
+    }
 
 
 @router.post("/appointments/status")

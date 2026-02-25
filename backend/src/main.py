@@ -1,3 +1,16 @@
+from pathlib import Path
+import logging
+from dotenv import load_dotenv
+
+# Always load .env from the backend directory (so it works no matter where uvicorn is started)
+_backend_dir = Path(__file__).resolve().parent.parent
+load_dotenv(_backend_dir / ".env")
+
+# Show logs for payload building (direct vs Bedrock) and carrier API calls
+logging.basicConfig(level=logging.INFO)
+for name in ("src.api.admin", "src.services.carrier_dispatcher", "src.services.carrier_transform_service"):
+    logging.getLogger(name).setLevel(logging.INFO)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.api import admin, carrier

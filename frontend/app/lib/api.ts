@@ -148,3 +148,16 @@ export interface CreateAdvisorResponse {
   success: boolean;
   advisor_id: string;
 }
+
+export interface CreateAndTransferRequest {
+  agent: CreateAdvisorRequest;
+  carriers: string[];
+  states: string[];
+}
+
+export interface CreateAndTransferResponse {
+  success: boolean;
+  advisor_id: string;
+  submission_ids: string[];
+  status: string;
+}

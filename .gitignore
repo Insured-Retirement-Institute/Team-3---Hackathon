@@ -402,3 +402,4 @@ FodyWeavers.xsd
 # Backend local
 backend/.venv/
 backend/local_data/
+backend/.env
