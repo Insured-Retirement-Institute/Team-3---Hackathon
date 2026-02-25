@@ -8,9 +8,16 @@ export interface Carrier {
   has_custom_yaml?: boolean;
 }
 
+// Match backend carrier_registry.py CARRIER_NAMES so display names are correct even before API load
 const FALLBACK_CARRIERS: Carrier[] = [
   { id: "1", name: "MassMutual" },
   { id: "2", name: "Nationwide" },
+  { id: "3", name: "Principal" },
+  { id: "4", name: "Lincoln Financial" },
+  { id: "5", name: "Pacific Life" },
+  { id: "6", name: "Guardian Life" },
+  { id: "7", name: "Ameritas" },
+  { id: "8", name: "Transamerica" },
 ];
 
 const LEGACY_CARRIER_NAMES: Record<string, string> = {
