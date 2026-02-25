@@ -41,6 +41,73 @@ def get_carrier_name(carrier_id: str) -> str:
     return CARRIER_NAMES.get(carrier_id) or _LEGACY_NAMES.get(carrier_id, carrier_id)
 
 
+# Reverse: name (normalized lower) -> carrier id, for resolving "Principal" -> "3"
+def _name_to_id_map() -> dict[str, str]:
+    out: dict[str, str] = {}
+    for cid, name in {**CARRIER_NAMES, **_LEGACY_NAMES}.items():
+        if name:
+            out[name.strip().lower()] = cid
+    return out
+
+
+_NAME_TO_ID = _name_to_id_map()
+
+
+def get_carrier_id_by_name(name: str) -> str | None:
+    """Resolve a carrier name or id to carrier id. Returns None if not found."""
+    if not name or not isinstance(name, str):
+        return None
+    s = name.strip()
+    if not s:
+        return None
+    if s in CARRIER_NAMES or s in _LEGACY_NAMES:
+        return s
+    return _NAME_TO_ID.get(s.lower())
+
+
+def resolve_carrier_names_to_ids(values: list[str]) -> list[str]:
+    """
+    Resolve a list of carrier identifiers (ids or names, comma-separated allowed) to carrier IDs.
+    E.g. ['1', 'Principal', 'ABC Life, Principal'] -> ['1', '3'] (deduped, order preserved).
+    Unknown names are skipped; if a segment contains a known name (e.g. 'Principal' in 'XYZ, Principal'),
+    that carrier is included. Also matches known names inside the whole raw string so
+    'ABC Life Insurance Company, XYZ Annuity Corp, Principal' resolves to ['3'].
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+
+    def add_if_known(cid: str) -> None:
+        if cid and cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+
+    for raw in values:
+        if not raw or not isinstance(raw, str):
+            continue
+        raw_clean = raw.strip()
+        if not raw_clean:
+            continue
+        # First try exact/match per segment (split by comma)
+        for part in (p.strip() for p in raw_clean.split(",") if p.strip()):
+            cid = get_carrier_id_by_name(part)
+            if cid:
+                add_if_known(cid)
+            else:
+                # Try to find any known carrier name inside this segment (e.g. "Principal" in "Principal Financial")
+                for known_name_lower, known_id in _NAME_TO_ID.items():
+                    if known_name_lower in part.lower():
+                        add_if_known(known_id)
+                        break
+        # If the whole raw string was one segment and we didn't match, try containment on the full string
+        # (e.g. "ABC Life Insurance Company, XYZ Annuity Corp, Principal" contains "principal")
+        if not result and raw_clean:
+            raw_lower = raw_clean.lower()
+            for known_name_lower, known_id in _NAME_TO_ID.items():
+                if known_name_lower in raw_lower:
+                    add_if_known(known_id)
+    return result
+
+
 _LEGACY_DEFAULT_TEMPLATE: dict[str, str] = {"carrier-a": "flat", "carrier-b": "nested"}
 
 

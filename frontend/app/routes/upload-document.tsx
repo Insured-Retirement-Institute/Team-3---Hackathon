@@ -202,19 +202,30 @@ export default function UploadDocument() {
         allFormFields[key] = getFieldValue(key, value);
       });
 
-      // Log what we're sending for debugging
-      console.log('Sending form fields:', allFormFields);
+      // Use carriers from extracted sheet (e.g. "Carrier" column) or from highlighted_items (extraction carrier list)
+      const carrierKeys = ['Carrier', 'carrier', 'Carriers', 'carriers', 'Agent Carriers', 'carrier_name'];
+      const carrierFromSheet = carrierKeys.map(k => allFormFields[k]).find(Boolean);
+      const carriersToSend: string[] = carrierFromSheet
+        ? [carrierFromSheet.trim()]
+        : [];
+      const highlightedItems = (extractedData.data?.highlighted_items || []).filter(Boolean).map(String);
 
-      // Call transfer API
       const response = await api.post('/api/admin/transfer-from-document', {
         form_fields: allFormFields,
-        carriers: ["1", "2"], // Default carriers - can be made configurable
-        states: [], // Will use license states from form or defaults
+        carriers: carriersToSend,
+        highlighted_items: highlightedItems.length ? highlightedItems : undefined,
+        states: [],
         transfer_immediately: true
-      });
+      }) as { success: boolean; advisor_id: string; status?: string; message?: string; submission_ids?: string[] };
 
       if (response.success) {
-        setTransferSuccess(`Agent created successfully! ID: ${response.advisor_id}`);
+        const subCount = response.submission_ids?.length ?? 0;
+        const msg = response.status === 'created_no_transfer' && response.message
+          ? `Advisor created. ${response.message}`
+          : subCount > 0
+            ? `Agent created and ${subCount} transfer(s) queued. ID: ${response.advisor_id}`
+            : `Agent created successfully! ID: ${response.advisor_id}`;
+        setTransferSuccess(msg);
         
         // Navigate to agent list after 2 seconds
         setTimeout(() => {

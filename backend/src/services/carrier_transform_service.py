@@ -182,14 +182,14 @@ async def transform_to_carrier_format(
         return None
 
     system_prompt = """You are a data mapper. You will be given:
-1) A YAML specification of the expected request body for a carrier API (request schema).
-2) Source data: an advisor object and a list of requested states.
+1) A YAML specification of the expected request body for a carrier API (request schema). The schema can have any level of nesting (e.g. application.applicant, meta.agent.contacts, etc.).
+2) Source data: an advisor object (npn, first_name, last_name, email, phone, broker_dealer, license_states, advisor_id) and a list of requested states.
 
 Your task: output exactly one valid JSON object that is the HTTP request body for the carrier API.
-The JSON must conform to the structure and field names described in the YAML. Map advisor fields
-and states to the expected keys. Use only the fields present in the YAML. If the YAML shows
-nested objects or arrays, produce that structure. Output nothing else except the JSON object
-(no explanation, no markdown)."""
+- Structure: Produce the exact structure (including any nesting depth) described in the YAML. Nested objects and arrays must match the YAML.
+- Name fields: (a) If the YAML has a single name field (e.g. agent_name, full_name, applicant_name) at any nesting level, set it to advisor first_name + " " + last_name (or the one that is present). (b) If the YAML has separate first/last name fields (e.g. first_name, last_name or agent_first_name, agent_last_name) at any nesting level, map advisor first_name and last_name to those keys.
+- Other fields: Map advisor fields to YAML keys by meaning even when names differ (e.g. npn -> national_producer_number, email -> agent_email, phone -> agent_phone). States list -> jurisdictions or states_requested or equivalent in the YAML.
+- Use only fields present in the YAML; omit advisor fields that have no matching key. Output nothing else except the JSON object (no explanation, no markdown)."""
 
     user_content = f"""YAML request format:
 {format_yaml}

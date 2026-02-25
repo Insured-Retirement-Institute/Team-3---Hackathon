@@ -1,0 +1,23 @@
+# Transform demo – YAML uses different field names; AI merges first_name + last_name into single name
+#
+# Input (advisor): first_name, last_name, email, npn, phone, broker_dealer, license_states
+# Output (this schema): agent_name (single field = first_name + " " + last_name), agent_email, national_producer_number, etc.
+#
+# In backend logs you will see:
+#   1) [CARRIER] Input data:  { advisor: { first_name, last_name, ... }, submitted_states }
+#   2) [BEDROCK] Carrier request body: { application: { applicant: { agent_name: "Agent Lee", ... } } }
+# So you can verify that first_name + last_name -> agent_name (merged by AI).
+#
+# How to test: Upload for carrier 3, then create-and-transfer or dispatch-all; check logs for input then output.
+#
+application:
+  carrier_code: string
+  applicant:
+    id: string
+    national_producer_number: string
+    agent_name: string
+    agent_email: string
+    agent_phone: string
+    broker_dealer: string
+    licensed_states: list of strings
+  jurisdictions: list of state codes

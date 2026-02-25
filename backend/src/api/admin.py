@@ -42,9 +42,11 @@ request:
 from src.utils import json_store
 from src.utils import carrier_formats as carrier_formats_store
 from src.utils.carrier_registry import (
+    get_carrier_id_by_name,
     get_carrier_name,
     get_default_template,
     list_carriers as registry_list_carriers,
+    resolve_carrier_names_to_ids,
     STANDARD_TEMPLATE,
 )
 import boto3
@@ -97,10 +99,11 @@ class CreateAndTransferRequest(BaseModel):
 class TransferFromDocumentRequest(BaseModel):
     """Create agent from document extraction and optionally transfer to carriers."""
     form_fields: dict = Field(..., description="Extracted form fields from document")
-    carriers: List[str] = Field(default_factory=list, description="Carrier IDs e.g. ['1','2','3']")
+    carriers: List[str] = Field(default_factory=list, description="Carrier IDs or names from sheet")
     states: List[str] = Field(default_factory=list, description="State codes e.g. ['AL','CA']")
     transfer_immediately: bool = Field(True, description="If true, transfer to carriers immediately")
     carrier_base_url: Optional[str] = None
+    highlighted_items: Optional[List[str]] = Field(None, description="From extraction (e.g. carrier list) when form_fields has no Carrier key")
 
 
 class CarrierPayloadUploadRequest(BaseModel):
@@ -186,6 +189,29 @@ def _log_carrier_request_body(carrier_id: str, format_used: str, payload: dict, 
     )
 
 
+def _ensure_meta_carrier_id(payload: dict, carrier_id: str) -> None:
+    """Ensure payload.meta.carrier_id is set so dummy/2 (nested) endpoint does not return 400."""
+    meta = payload.get("meta")
+    if meta is not None and isinstance(meta, dict):
+        if not meta.get("carrier_id") and not meta.get("carrierId"):
+            meta["carrier_id"] = str(carrier_id)
+
+
+def _log_carrier_input(carrier_id: str, advisor_dict: dict, carrier_format: str, submitted_states: List[str]) -> None:
+    """Log the input data used to build the carrier request (for debugging)."""
+    try:
+        input_payload = {
+            "carrier_id": carrier_id,
+            "carrier_format_requested": carrier_format,
+            "advisor": advisor_dict,
+            "submitted_states": submitted_states,
+        }
+        body_str = json.dumps(input_payload, indent=2, default=str)
+    except (TypeError, ValueError):
+        body_str = str({"carrier_id": carrier_id, "advisor": advisor_dict, "submitted_states": submitted_states})
+    logger.info("[CARRIER] Input data for carrier_id=%s:\n%s", carrier_id, body_str)
+
+
 async def _build_payload_for_carrier(
     advisor: Any,
     carrier_id: str,
@@ -206,6 +232,7 @@ async def _build_payload_for_carrier(
       or updated via POST /api/admin/carrier-formats/{carrier_id}, the next transfer request uses that YAML.
     """
     advisor_dict = _advisor_to_dict(advisor)
+    _log_carrier_input(carrier_id, advisor_dict, carrier_format, submitted_states)
     default_tpl = get_default_template(carrier_id)
     format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
 
@@ -223,6 +250,7 @@ async def _build_payload_for_carrier(
                 carrier_id,
                 list(transformed.keys())[:10],
             )
+            _ensure_meta_carrier_id(transformed, carrier_id)
             _log_carrier_request_body(carrier_id, "custom_yaml", transformed)
             return transformed, "custom_yaml", True
 
@@ -240,6 +268,7 @@ async def _build_payload_for_carrier(
                 carrier_id,
                 list(nested_payload.keys())[:10],
             )
+            _ensure_meta_carrier_id(nested_payload, carrier_id)
             _log_carrier_request_body(carrier_id, "nested", nested_payload)
             return nested_payload, "nested", True
         logger.info("[CARRIER] Framing request for carrier_id=%s as format=nested (direct builder, Bedrock unavailable)", carrier_id)
@@ -336,8 +365,8 @@ async def create_advisor(body: AdvisorCreateRequest, db: Session = Depends(get_d
 @router.post("/create-and-transfer")
 async def create_agent_and_transfer(body: CreateAndTransferRequest, background_tasks: BackgroundTasks):
     """
-    Create a new agent and immediately submit transfer requests: one per (carrier, state).
-    Requires USE_JSON_STORE=true. Agent details + carriers + states in one request.
+    Create a new agent and submit transfer requests: one per carrier, with all states grouped.
+    Requires USE_JSON_STORE=true. Each (agent, carrier) gets one submission and one carrier API call.
     """
     use_json = os.getenv("USE_JSON_STORE", "true").lower() in {"1", "true", "yes"}
     if not use_json:
@@ -350,7 +379,15 @@ async def create_agent_and_transfer(body: CreateAndTransferRequest, background_t
     if not advisor:
         raise HTTPException(500, "Advisor created but not found")
 
-    carrier_ids = body.carriers or ["1", "2"]
+    raw_carriers = body.carriers or ["1", "2"]
+    carrier_ids = resolve_carrier_names_to_ids(raw_carriers)
+    if not carrier_ids and raw_carriers:
+        raise HTTPException(
+            400,
+            f"Could not resolve any carrier IDs from: {raw_carriers}. Use carrier IDs (e.g. '1','2','3') or names (e.g. 'MassMutual','Principal').",
+        )
+    if not carrier_ids:
+        carrier_ids = ["1", "2"]
     states_list = body.states or ["CA", "TX"]
     carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
 
@@ -361,25 +398,23 @@ async def create_agent_and_transfer(body: CreateAndTransferRequest, background_t
             carrier_format = "nested"
         else:
             carrier_format = "flat"
-        for one_state in states_list:
-            submitted_states_single = [one_state]
-            payload, format_used, _ = await _build_payload_for_carrier(
-                advisor, carrier_id, carrier_format, submitted_states_single
-            )
-            submission_id = json_store.create_submission(
-                {
-                    "advisor_id": str(advisor.get("id")),
-                    "carrier_id": carrier_id,
-                    "integration_method": "api",
-                    "status": "queued",
-                    "request_data": {
-                        "carrier_format": format_used,
-                        "payload": payload,
-                        "submitted_states": submitted_states_single,
-                    },
-                }
-            )
-            submission_ids.append(submission_id)
+        payload, format_used, _ = await _build_payload_for_carrier(
+            advisor, carrier_id, carrier_format, states_list
+        )
+        submission_id = json_store.create_submission(
+            {
+                "advisor_id": str(advisor.get("id")),
+                "carrier_id": carrier_id,
+                "integration_method": "api",
+                "status": "queued",
+                "request_data": {
+                    "carrier_format": format_used,
+                    "payload": payload,
+                    "submitted_states": states_list,
+                },
+            }
+        )
+        submission_ids.append(submission_id)
 
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
@@ -558,11 +593,43 @@ async def transfer_agent_from_document(body: TransferFromDocumentRequest):
     
     if not advisor:
         raise HTTPException(500, "Advisor created but not found")
-    
+
+    # Resolve carriers: use body.carriers if provided, else derive from form_fields (e.g. Excel "Carrier" column)
+    raw_carriers: List[str] = list(body.carriers) if body.carriers else []
+    if not raw_carriers:
+        carrier_value = get_field([
+            "Carrier", "carrier", "Carriers", "carriers", "Agent Carriers", "agent_carriers",
+            "Carrier Name", "carrier_name", "Target Carriers", "target_carriers"
+        ])
+        if carrier_value:
+            raw_carriers = [carrier_value]
+            logger.info(f"✓ Using carriers from document: '{carrier_value}'")
+    if not raw_carriers and isinstance(form_fields.get("highlighted_items"), list):
+        raw_carriers = [str(x) for x in form_fields["highlighted_items"] if x]
+        if raw_carriers:
+            logger.info(f"✓ Using carriers from form_fields.highlighted_items: {raw_carriers}")
+    if not raw_carriers and body.highlighted_items:
+        raw_carriers = [str(x).strip() for x in body.highlighted_items if x]
+        if raw_carriers:
+            logger.info(f"✓ Using carriers from request highlighted_items: {raw_carriers}")
+
+    if body.transfer_immediately and not raw_carriers:
+        logger.warning(
+            "No carriers to transfer: form_fields has no 'Carrier' (or carrier/Carriers). "
+            "Extracted keys: %s. Add a Carrier column to your Excel or send carriers in the request.",
+            list(form_fields.keys()),
+        )
+
     # If transfer requested, submit to carriers
     submission_ids: List[str] = []
-    if body.transfer_immediately and body.carriers:
-        carrier_ids = body.carriers
+    if body.transfer_immediately and raw_carriers:
+        carrier_ids = resolve_carrier_names_to_ids(raw_carriers)
+        logger.info(f"✓ Resolved carriers: {raw_carriers} -> {carrier_ids}")
+        if not carrier_ids:
+            raise HTTPException(
+                400,
+                f"Could not resolve any carrier IDs from: {raw_carriers}. Use IDs (e.g. '1','3') or names (e.g. 'MassMutual','Principal').",
+            )
         states_list = body.states or agent_data["license_states"] or ["CA", "TX"]
         carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
         
@@ -572,26 +639,24 @@ async def transfer_agent_from_document(body: TransferFromDocumentRequest):
                 carrier_format = "nested"
             else:
                 carrier_format = "flat"
-            
-            for one_state in states_list:
-                submitted_states_single = [one_state]
-                payload, format_used, _ = await _build_payload_for_carrier(
-                    advisor, carrier_id, carrier_format, submitted_states_single
-                )
-                submission_id = json_store.create_submission(
-                    {
-                        "advisor_id": str(advisor.get("id")),
-                        "carrier_id": carrier_id,
-                        "integration_method": "api",
-                        "status": "queued",
-                        "request_data": {
-                            "carrier_format": format_used,
-                            "payload": payload,
-                            "submitted_states": submitted_states_single,
-                        },
-                    }
-                )
-                submission_ids.append(submission_id)
+            # One request per carrier with all states (not one per state)
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, carrier_id, carrier_format, states_list
+            )
+            submission_id = json_store.create_submission(
+                {
+                    "advisor_id": str(advisor.get("id")),
+                    "carrier_id": carrier_id,
+                    "integration_method": "api",
+                    "status": "queued",
+                    "request_data": {
+                        "carrier_format": format_used,
+                        "payload": payload,
+                        "submitted_states": states_list,
+                    },
+                }
+            )
+            submission_ids.append(submission_id)
         
         # Dispatch submissions
         await dispatch_carrier_submissions(submission_ids, carrier_base_url)
@@ -620,13 +685,20 @@ async def transfer_agent_from_document(body: TransferFromDocumentRequest):
             except Exception as e:
                 logger.warning(f"Failed to send SNS notification for document transfer: {e}")
     
+    status = "sent_to_carrier" if (body.transfer_immediately and submission_ids) else "created"
+    if body.transfer_immediately and not submission_ids:
+        status = "created_no_transfer"
     return {
         "success": True,
         "advisor_id": advisor_id,
         "agent_data": agent_data,
-        "submission_ids": submission_ids if body.transfer_immediately else [],
-        "status": "sent_to_carrier" if body.transfer_immediately else "created",
-        "extracted_fields": list(form_fields.keys())
+        "submission_ids": submission_ids,
+        "status": status,
+        "extracted_fields": list(form_fields.keys()),
+        "message": (
+            "No carrier found in document. Add a 'Carrier' column to your Excel (e.g. 'Principal') so transfers can be created."
+            if (body.transfer_immediately and not submission_ids) else None
+        ),
     }
 
 
@@ -789,50 +861,49 @@ async def dispatch_advisor_to_all_carriers(
         states_per_carrier = [["CA", "TX"]] * len(carriers)  # default
 
     for c, states_list in zip(carriers, states_per_carrier):
+        carrier_id = get_carrier_id_by_name(c.carrier_id) or c.carrier_id
         carrier_format = (c.carrier_format or "").lower()
         if carrier_format not in {"flat", "nested"}:
             raise HTTPException(400, "carrier_format must be flat or nested")
         states_to_use = states_list if states_list else ["CA", "TX"]
 
-        for one_state in states_to_use:
-            submitted_states_single = [one_state]
-            if db is None:
-                payload, format_used, _ = await _build_payload_for_carrier(
-                    advisor, c.carrier_id, carrier_format, submitted_states_single
-                )
-                submission_id = json_store.create_submission(
-                    {
-                        "advisor_id": str(advisor.get("id")),
-                        "carrier_id": c.carrier_id,
-                        "integration_method": c.integration_method,
-                        "status": "queued",
-                        "request_data": {
-                            "carrier_format": format_used,
-                            "payload": payload,
-                            "submitted_states": submitted_states_single,
-                        },
-                    }
-                )
-                submission_ids.append(submission_id)
-            else:
-                payload, format_used, _ = await _build_payload_for_carrier(
-                    advisor, c.carrier_id, carrier_format, submitted_states_single
-                )
-                submission = CarrierSubmission(
-                    advisor_id=advisor.id,
-                    carrier_name=c.carrier_id,
-                    integration_method=c.integration_method,
-                    status="queued",
-                    request_data={
+        if db is None:
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, carrier_id, carrier_format, states_to_use
+            )
+            submission_id = json_store.create_submission(
+                {
+                    "advisor_id": str(advisor.get("id")),
+                    "carrier_id": carrier_id,
+                    "integration_method": c.integration_method,
+                    "status": "queued",
+                    "request_data": {
                         "carrier_format": format_used,
                         "payload": payload,
-                        "submitted_states": submitted_states_single,
+                        "submitted_states": states_to_use,
                     },
-                )
-                db.add(submission)
-                db.commit()
-                db.refresh(submission)
-                submission_ids.append(str(submission.id))
+                }
+            )
+            submission_ids.append(submission_id)
+        else:
+            payload, format_used, _ = await _build_payload_for_carrier(
+                advisor, carrier_id, carrier_format, states_to_use
+            )
+            submission = CarrierSubmission(
+                advisor_id=advisor.id,
+                carrier_name=carrier_id,
+                integration_method=c.integration_method,
+                status="queued",
+                request_data={
+                    "carrier_format": format_used,
+                    "payload": payload,
+                    "submitted_states": states_to_use,
+                },
+            )
+            db.add(submission)
+            db.commit()
+            db.refresh(submission)
+            submission_ids.append(str(submission.id))
 
     carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
@@ -845,7 +916,7 @@ async def dispatch_advisor_to_all_carriers(
             else:
                 advisor_name = f"{advisor.first_name or ''} {advisor.last_name or ''}".strip() or "Unknown Advisor"
             
-            carrier_ids = [c.carrier_id for c in carriers]
+            carrier_ids = [get_carrier_id_by_name(c.carrier_id) or c.carrier_id for c in carriers]
             carrier_names = [get_carrier_name(cid) for cid in carrier_ids]
             carriers_str = ", ".join(carrier_names)
             
@@ -949,46 +1020,44 @@ async def submit_advisor_to_carrier(
     states_to_use = body.submitted_states or ["CA", "TX"]
     submission_ids: List[str] = []
 
-    for one_state in states_to_use:
-        submitted_states_single = [one_state]
-        if db is None:
-            payload, format_used, _ = await _build_payload_for_carrier(
-                advisor, body.carrier_id, carrier_format, submitted_states_single
-            )
-            submission_id = json_store.create_submission(
-                {
-                    "advisor_id": str(advisor.get("id")),
-                    "carrier_id": body.carrier_id,
-                    "integration_method": body.integration_method,
-                    "status": "queued",
-                    "request_data": {
-                        "carrier_format": format_used,
-                        "payload": payload,
-                        "submitted_states": submitted_states_single,
-                    },
-                }
-            )
-            submission_ids.append(submission_id)
-        else:
-            payload, format_used, _ = await _build_payload_for_carrier(
-                advisor, body.carrier_id, carrier_format, submitted_states_single
-            )
-            submission = CarrierSubmission(
-                advisor_id=advisor.id,
-                carrier_name=body.carrier_id,
-                integration_method=body.integration_method,
-                status="queued",
-                request_data={
+    if db is None:
+        payload, format_used, _ = await _build_payload_for_carrier(
+            advisor, body.carrier_id, carrier_format, states_to_use
+        )
+        submission_id = json_store.create_submission(
+            {
+                "advisor_id": str(advisor.get("id")),
+                "carrier_id": body.carrier_id,
+                "integration_method": body.integration_method,
+                "status": "queued",
+                "request_data": {
                     "carrier_format": format_used,
                     "payload": payload,
-                    "submitted_states": submitted_states_single,
+                    "submitted_states": states_to_use,
                 },
-                submitted_at=None,
-            )
-            db.add(submission)
-            db.commit()
-            db.refresh(submission)
-            submission_ids.append(str(submission.id))
+            }
+        )
+        submission_ids.append(submission_id)
+    else:
+        payload, format_used, _ = await _build_payload_for_carrier(
+            advisor, body.carrier_id, carrier_format, states_to_use
+        )
+        submission = CarrierSubmission(
+            advisor_id=advisor.id,
+            carrier_name=body.carrier_id,
+            integration_method=body.integration_method,
+            status="queued",
+            request_data={
+                "carrier_format": format_used,
+                "payload": payload,
+                "submitted_states": states_to_use,
+            },
+            submitted_at=None,
+        )
+        db.add(submission)
+        db.commit()
+        db.refresh(submission)
+        submission_ids.append(str(submission.id))
 
     carrier_base_url = os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)

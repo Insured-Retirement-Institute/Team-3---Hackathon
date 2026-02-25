@@ -104,7 +104,19 @@ Use **`carrier_format_examples/bedrock-test-format.yaml`**. That YAML describes 
 
 Other example YAMLs: `carrier-a.example.yaml` (flat shape), `carrier-b.example.yaml` (nested shape: meta/agent/appointment).
 
-<<<<<<< Updated upstream
+### Custom YAML: supported shapes
+
+The Bedrock transform supports **any** carrier YAML shape:
+
+| YAML shape | Supported |
+|------------|-----------|
+| **Single name field** (e.g. `full_name`, `agent_name`) | Yes – AI merges advisor `first_name` + `last_name` into one value. |
+| **Separate first/last** (e.g. `first_name`, `last_name` or `agent_first_name`, `agent_last_name`) | Yes – AI maps advisor `first_name` and `last_name` to those keys at any nesting level. |
+| **Arbitrary nesting** (e.g. `application.applicant`, `meta.agent.contacts`, `level1.level2.level3`) | Yes – output JSON matches the exact structure and depth in the YAML. |
+| **Different field names** (e.g. `national_producer_number`, `email_address`, `jurisdictions`) | Yes – AI maps by meaning (npn → national_producer_number, states → jurisdictions, etc.). |
+
+You can mix these: e.g. a deeply nested YAML with a single `applicant.full_name` or with separate `applicant.first_name` and `applicant.last_name`. The model is instructed to conform to the schema and map advisor data into it.
+
 ## Async carrier dispatch (background only)
 
 Carrier API calls run **only in the background**. Create-and-transfer, dispatch-all, and submit return immediately with `status: "queued"` and `submission_ids`; the actual HTTP calls to the carrier happen asynchronously.
@@ -135,7 +147,7 @@ When a **transfer request is created** (create-and-transfer, dispatch-all, or su
 | **YAML format** | Loaded **at request time** from `carrier_formats_store.load_carrier_format(carrier_id)` → reads `backend/local_data/carrier_formats/{carrier_id}.yaml`. |
 
 So: **add or update a carrier format (YAML) before creating a transfer**; the next transfer that includes that carrier will use the current YAML from disk. No restart needed. For carriers with custom YAML, Bedrock is invoked with that YAML + advisor + states to produce the JSON request body; for flat/nested without custom YAML, the built-in builders (or Bedrock with built-in nested YAML) are used.
-=======
+
 ## AWS SNS Notifications
 
 The API includes built-in support for sending notifications via **AWS SNS (Simple Notification Service)**:
@@ -190,19 +202,13 @@ curl -X POST "http://localhost:8000/api/notifications/send" \
   -H "Content-Type: application/json" \
   -d '{"subject": "Test", "message": "Hello from API"}'
 ```
->>>>>>> Stashed changes
 
 ## Environment
 
 - `USE_JSON_STORE` — set to `true` (default) to use local JSON files under `local_data/`; set to `false` to use a database (set `DATABASE_URL`).
 - `S3_BUCKET` — optional; if set, advisor file uploads go to S3; if unset, uploads are stored under `local_data/uploads/` for local dev.
 - `CARRIER_BASE_URL` — base URL for carrier API calls (default: http://localhost:8000).
-<<<<<<< Updated upstream
 - `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform. If you see "on-demand throughput isn't supported", your account may require an **inference profile** ARN instead of the model ID (set this env to the profile ARN from the Bedrock console). The code will try fallback models and log at INFO when one succeeds.
-- `AWS_REGION` — used for Bedrock (default: us-east-1).
-=======
-- `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform (default: `anthropic.claude-3-5-sonnet-v2:0`).
 - `AWS_REGION` — used for Bedrock and SNS (default: us-east-1).
 - `SNS_TOPIC_ARN` — optional; ARN of SNS topic for notifications.
 - `SNS_ENABLED` — optional; set to `true` to enable SNS notifications (default: false).
->>>>>>> Stashed changes
