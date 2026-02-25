@@ -21,6 +21,22 @@ from src.services.carrier_transform_service import (
     get_last_transform_error,
     BUILTIN_NESTED_FORMAT_YAML,
 )
+
+# Built-in flat format YAML so UI can display it for carriers without custom YAML
+BUILTIN_FLAT_FORMAT_YAML = """# Standard carrier template (flat)
+request:
+  carrierId: string
+  advisor:
+    advisor_id: string
+    npn: string
+    first_name: string
+    last_name: string
+    email: string
+    phone: string
+    broker_dealer: string
+    license_states: list of strings
+  statesRequested: list of state codes
+""".strip()
 from src.utils import json_store
 from src.utils import carrier_formats as carrier_formats_store
 from src.utils.carrier_registry import (
@@ -765,6 +781,34 @@ async def list_carriers_endpoint():
         }
         for c in carriers_raw
     ]
+    return {"success": True, "data": data}
+
+
+@router.get("/carriers/with-formats")
+async def list_carriers_with_formats():
+    """
+    List all carriers with id, name, format used (flat | nested | custom_yaml), and YAML content.
+    Always includes yaml: built-in flat/nested YAML when no custom YAML is uploaded, else the custom YAML.
+    """
+    carriers_raw = registry_list_carriers()
+    data = []
+    for c in carriers_raw:
+        cid = c["id"]
+        name = c["name"]
+        default_tpl = get_default_template(cid)
+        yaml_content = carrier_formats_store.load_carrier_format(cid)
+        if yaml_content:
+            format_used = "custom_yaml"
+            yaml_to_return = yaml_content
+        else:
+            format_used = default_tpl
+            yaml_to_return = BUILTIN_NESTED_FORMAT_YAML if default_tpl == "nested" else BUILTIN_FLAT_FORMAT_YAML
+        data.append({
+            "carrier_id": cid,
+            "name": name,
+            "format_used": format_used,
+            "yaml": yaml_to_return,
+        })
     return {"success": True, "data": data}
 
 
