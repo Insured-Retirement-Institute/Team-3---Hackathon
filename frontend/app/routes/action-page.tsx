@@ -93,7 +93,7 @@ export default function ActionPage() {
           <Box
             sx={{
               display: "grid",
-              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(4, 1fr)" },
+              gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)", md: "repeat(3, 1fr)", lg: "repeat(5, 1fr)" },
               gap: 2,
               mb: 4,
             }}
@@ -124,6 +124,13 @@ export default function ActionPage() {
                 <CloudUpload sx={{ fontSize: 48, color: "#003366", mb: 1 }} />
                 <Typography variant="h6" fontWeight="600" color="text.primary">Carrier formats</Typography>
                 <Typography variant="body2" color="text.secondary">Configure request format per carrier</Typography>
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/upload-document")}>
+              <CardContent sx={{ textAlign: "center", py: 4 }}>
+                <CloudUpload sx={{ fontSize: 48, color: "#003366", mb: 1 }} />
+                <Typography variant="h6" fontWeight="600" color="text.primary">Upload PDF Document</Typography>
+                <Typography variant="body2" color="text.secondary">Extract data from PDF using AI</Typography>
               </CardContent>
             </Card>
           </Box>

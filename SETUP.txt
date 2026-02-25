@@ -1,0 +1,133 @@
+===============================================================================
+DOCUMENT EXTRACTION API - SETUP INSTRUCTIONS
+===============================================================================
+
+This API extracts structured JSON from PDF and Excel files using the 
+python-ocr-demo Vision Extract API.
+
+===============================================================================
+QUICK START
+===============================================================================
+
+STEP 1: Start python-ocr-demo service
+--------------------------------------
+cd /Users/sandeepnair/dev/python-ocr-demo
+python app.py
+
+(Service should start on http://localhost:8000)
+
+
+STEP 2: Install dependencies and start this API
+------------------------------------------------
+cd /Users/sandeepnair/dev/Team-3---Hackathon/backend
+pip install -r requirements.txt
+./start.sh
+
+(API should start on http://localhost:8001)
+
+
+STEP 3: Test the API
+---------------------
+
+Option A - Web Interface:
+  cd /Users/sandeepnair/dev/Team-3---Hackathon/frontend
+  python -m http.server 5500
+  Open browser to http://localhost:5500
+
+Option B - cURL:
+  curl http://localhost:8001/health
+  curl -X POST http://localhost:8001/api/extract -F "file=@document.pdf"
+
+Option C - Test Script:
+  ./test_api.sh /path/to/document.pdf
+
+
+===============================================================================
+API ENDPOINTS
+===============================================================================
+
+GET /health
+  - Health check endpoint
+  - Returns: {"status": "healthy", "ocr_service_available": true}
+
+POST /api/extract
+  - Extract data from PDF or Excel
+  - Body: multipart/form-data with "file" field
+  - Returns: JSON with extracted data
+
+
+===============================================================================
+RESPONSE FORMAT
+===============================================================================
+
+{
+  "success": true,
+  "filename": "document.pdf",
+  "extraction_method": "claude_vision",
+  "data": {
+    "form_fields": {
+      "Full Name": "John Doe",
+      "Email": "john@example.com"
+    },
+    "highlighted_items": ["Item 1", "Item 2"],
+    "background_info": {"Question": "YES"},
+    "signatures": {"Signature": "signed"}
+  },
+  "confidence": 0.95,
+  "pages_analyzed": 3
+}
+
+
+===============================================================================
+ARCHITECTURE
+===============================================================================
+
+Browser ──> This API (:8001) ──> python-ocr-demo (:8000) ──> Claude Vision
+         Proxy/Transform          Vision Extract API         Bedrock
+
+
+===============================================================================
+TROUBLESHOOTING
+===============================================================================
+
+"Cannot connect to OCR service"
+  → Make sure python-ocr-demo is running on port 8000
+
+"Vision extraction not available"
+  → Check python-ocr-demo has Bedrock configured in .env
+
+"Port already in use"
+  → Edit backend/.env and change APP_PORT to another port
+
+
+===============================================================================
+PROJECT STRUCTURE
+===============================================================================
+
+backend/
+  src/
+    main.py         - FastAPI application (proxy)
+    config.py       - Configuration loader
+  requirements.txt  - Python dependencies
+  .env             - Environment configuration
+  start.sh         - Helper script to start API
+
+frontend/
+  index.html       - Web interface for testing
+
+test_api.sh        - Test script
+
+
+===============================================================================
+CONFIGURATION
+===============================================================================
+
+Edit backend/.env to configure:
+
+OCR_SERVICE_URL=http://localhost:8000  (python-ocr-demo URL)
+APP_HOST=0.0.0.0
+APP_PORT=8001
+LOG_LEVEL=INFO
+
+
+===============================================================================

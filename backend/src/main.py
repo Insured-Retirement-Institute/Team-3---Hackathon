@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.api import admin, carrier
+from src.api import admin, carrier, document
 from src.utils.database import engine, Base
 import os
 
@@ -26,6 +26,7 @@ app.add_middleware(
 # Include routers
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(carrier.router, prefix="/api/carrier", tags=["Carrier"])
+app.include_router(document.router, prefix="/api", tags=["Document Extraction"])
 
 @app.get("/")
 async def root():
