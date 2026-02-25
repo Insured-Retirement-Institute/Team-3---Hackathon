@@ -1,12 +1,16 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { api, type ListCarrierSubmissionsResponse, type ListAdvisorsResponse } from "~/lib/api";
+import { getCarrierDisplayName } from "./carrierSlice";
+import { stateCodeToName } from "~/lib/states";
 
 export interface PendingRequest {
-  id: number;
+  id: string;
+  advisor_id: string;
   agent: string;
   carrier: string;
   state: string;
   date: string;
-  status: "Pending" | "In Progress" | "Approved" | "Rejected";
+  status: string;
 }
 
 interface PendingRequestsState {
@@ -21,58 +25,47 @@ const initialState: PendingRequestsState = {
   error: null,
 };
 
-// Mock data
-const mockPendingRequests: PendingRequest[] = [
-  {
-    id: 1,
-    agent: "John Smith",
-    carrier: "State Farm",
-    state: "CA",
-    date: "2024-02-20",
-    status: "Pending",
-  },
-  {
-    id: 2,
-    agent: "Jane Doe",
-    carrier: "Allstate",
-    state: "TX",
-    date: "2024-02-21",
-    status: "In Progress",
-  },
-  {
-    id: 3,
-    agent: "Mike Johnson",
-    carrier: "Progressive",
-    state: "NY",
-    date: "2024-02-22",
-    status: "Approved",
-  },
-    {
-    id: 4,
-    agent: "Jessica Day",
-    carrier: "Progressive",
-    state: "CA",
-    date: "2024-02-22",
-    status: "Approved",
-  },
-];
-
-// Async thunk for fetching pending requests
 export const fetchPendingRequests = createAsyncThunk(
   "pendingRequests/fetchPendingRequests",
   async (_, { rejectWithValue }) => {
     try {
-      // Simulate axios call with setTimeout
-      const requests = await new Promise<PendingRequest[]>((resolve) => {
-        setTimeout(() => {
-          resolve(mockPendingRequests);
-        }, 200); // Simulate network delay
-      });
+      const [subRes, advRes] = await Promise.all([
+        api.get<ListCarrierSubmissionsResponse>("/api/admin/carrier-submissions"),
+        api.get<ListAdvisorsResponse>("/api/admin/advisors"),
+      ]);
+      if (!subRes.success) throw new Error("Failed to load submissions");
+      const list = subRes.data || [];
+      const advisors = advRes.success && advRes.data ? advRes.data : [];
+      const advisorNameById = new Map(
+        advisors.map((a) => [a.id, (a.name || a.npn || a.id) || "—"])
+      );
+      const getAgentDisplayName = (advisorId: string) =>
+        advisorNameById.get(advisorId) ?? advisorId;
 
+      const requests: PendingRequest[] = list.map((s) => {
+        const reqData = s.request_data || {};
+        const submitted = reqData.submitted_states || [];
+        const accepted = s.accepted_states || [];
+        const rejected = s.rejected_states || [];
+        const stateCodes = submitted.length ? submitted : accepted.length ? accepted : rejected;
+        const stateDisplay = stateCodes.length
+          ? stateCodes.map((c) => stateCodeToName(c)).join(", ")
+          : "—";
+        const carrierId = s.carrier_id || "";
+        return {
+          id: s.id,
+          advisor_id: s.advisor_id,
+          agent: getAgentDisplayName(s.advisor_id),
+          carrier: getCarrierDisplayName(carrierId) || carrierId || "—",
+          state: stateDisplay,
+          date: s.created_at ? new Date(s.created_at).toLocaleDateString() : "—",
+          status: s.status || "pending",
+        };
+      });
       return requests;
-    } catch (error) {
+    } catch (e) {
       return rejectWithValue(
-        error instanceof Error ? error.message : "Failed to fetch pending requests"
+        e instanceof Error ? e.message : "Failed to fetch pending requests"
       );
     }
   }

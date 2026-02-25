@@ -7,10 +7,39 @@ import {
   ScrollRestoration,
 } from "react-router";
 import { Provider } from "react-redux";
+import { ThemeProvider, createTheme } from "@mui/material/styles";
 
 import type { Route } from "./+types/root";
 import { store } from "./store/store";
 import "./app.css";
+
+// Raymond James–style: navy blue and gray
+const theme = createTheme({
+  palette: {
+    mode: "light",
+    primary: { main: "#003366" },
+    secondary: { main: "#5c6b7a" },
+    text: { primary: "#1a1a1a", secondary: "#4a4a4a" },
+    background: { default: "#f5f5f5", paper: "#ffffff" },
+  },
+  components: {
+    MuiInputLabel: {
+      styleOverrides: {
+        root: { color: "#4a4a4a" },
+      },
+    },
+    MuiFormLabel: {
+      styleOverrides: {
+        root: { color: "#4a4a4a" },
+      },
+    },
+    MuiTypography: {
+      styleOverrides: {
+        root: { color: "#1a1a1a" },
+      },
+    },
+  },
+});
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -45,9 +74,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <Provider store={store}>
-      <Outlet />
-    </Provider>
+    <ThemeProvider theme={theme}>
+      <Provider store={store}>
+        <Outlet />
+      </Provider>
+    </ThemeProvider>
   );
 }
 

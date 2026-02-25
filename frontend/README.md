@@ -1,3 +1,24 @@
+# Advisor Onboarding UI
+
+Frontend for the Advisor Onboarding API. Manage advisors, submit transfer requests to carriers, and upload carrier format YAML for Bedrock transform.
+
+## Backend
+
+Start the backend first (see repo `backend/README.md`):
+
+```bash
+cd backend && USE_JSON_STORE=true .venv/bin/uvicorn src.main:app --port 8000
+```
+
+Then run the frontend. It calls `http://localhost:8000` by default. To override:
+
+```bash
+export VITE_API_BASE_URL=http://localhost:8000
+npm run dev
+```
+
+---
+
 # Welcome to React Router!
 
 A modern, production-ready template for building full-stack React applications using React Router.

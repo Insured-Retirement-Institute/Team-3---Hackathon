@@ -1,9 +1,10 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { api } from "~/lib/api";
 
 export interface AgentTransferFormData {
-  agent: string;
+  advisor_id: string;
   carriers: string[];
-  state: string;
+  states: string[];
 }
 
 interface AgentTransferState {
@@ -11,36 +12,51 @@ interface AgentTransferState {
   loading: boolean;
   error: string | null;
   success: boolean;
+  submissionIds: string[];
 }
 
 const initialState: AgentTransferState = {
   formData: {
-    agent: "",
+    advisor_id: "",
     carriers: [],
-    state: "",
+    states: [],
   },
   loading: false,
   error: null,
   success: false,
+  submissionIds: [],
 };
 
-// Async thunk for submitting form data
 export const submitAgentTransferForm = createAsyncThunk(
   "agentTransfer/submitForm",
-  async (formData: AgentTransferFormData, { rejectWithValue }) => {
+  async (
+    { advisor_id, carriers, states }: AgentTransferFormData,
+    { rejectWithValue }
+  ) => {
     try {
-      // Simulate API call
-      // In a real app, replace this with an actual API endpoint
-      const response = await new Promise<AgentTransferFormData>((resolve) => {
-        setTimeout(() => {
-          resolve(formData);
-        }, 1000);
-      });
-
-      return response;
-    } catch (error) {
+      if (!advisor_id) throw new Error("Select an advisor");
+      const carrierFormat = (c: string) =>
+        c === "2" ? "nested" : "flat";
+      const body = {
+        carriers: (carriers.length ? carriers : ["1", "2"]).map(
+          (carrier_id) => ({
+            carrier_id,
+            carrier_format: carrierFormat(carrier_id),
+            integration_method: "api",
+            submitted_states: states.length ? states : ["CA", "TX"],
+          })
+        ),
+      };
+      const res = await api.post<{
+        success: boolean;
+        submission_ids: string[];
+        status: string;
+      }>(`/api/admin/advisors/${advisor_id}/carriers/dispatch-all`, body);
+      if (!res.success) throw new Error("Dispatch failed");
+      return { submissionIds: (res as { submission_ids?: string[] }).submission_ids || [] };
+    } catch (e) {
       return rejectWithValue(
-        error instanceof Error ? error.message : "Failed to submit form"
+        e instanceof Error ? e.message : "Failed to submit request"
       );
     }
   }
@@ -57,6 +73,7 @@ const agentTransferSlice = createSlice({
       state.formData = initialState.formData;
       state.error = null;
       state.success = false;
+      state.submissionIds = [];
     },
   },
   extraReducers: (builder) => {
@@ -68,9 +85,9 @@ const agentTransferSlice = createSlice({
       })
       .addCase(submitAgentTransferForm.fulfilled, (state, action) => {
         state.loading = false;
-        state.formData = action.payload;
         state.success = true;
         state.error = null;
+        state.submissionIds = action.payload.submissionIds || [];
       })
       .addCase(submitAgentTransferForm.rejected, (state, action) => {
         state.loading = false;

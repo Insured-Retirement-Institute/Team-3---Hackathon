@@ -1,8 +1,34 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
+import { api, type CarriersListResponse } from "~/lib/api";
 
 export interface Carrier {
   id: string;
   name: string;
+  default_template?: string;
+  has_custom_yaml?: boolean;
+}
+
+const FALLBACK_CARRIERS: Carrier[] = [
+  { id: "1", name: "MassMutual" },
+  { id: "2", name: "Nationwide" },
+];
+
+const LEGACY_CARRIER_NAMES: Record<string, string> = {
+  "carrier-a": "MassMutual",
+  "carrier-b": "Nationwide",
+  "carrier-c": "Principal",
+  "carrier-d": "Lincoln Financial",
+  "carrier-e": "Pacific Life",
+  "carrier-f": "Guardian Life",
+  "carrier-g": "Ameritas",
+  "carrier-h": "Transamerica",
+};
+
+export function getCarrierDisplayName(carrierId: string, carriers?: Carrier[]): string {
+  const list = carriers && carriers.length > 0 ? carriers : FALLBACK_CARRIERS;
+  const c = list.find((x) => x.id === carrierId);
+  if (c) return c.name;
+  return LEGACY_CARRIER_NAMES[carrierId] ?? carrierId;
 }
 
 interface CarrierState {
@@ -17,34 +43,15 @@ const initialState: CarrierState = {
   error: null,
 };
 
-// Mock axios call that fetches carriers
 export const fetchCarriers = createAsyncThunk(
   "carriers/fetchCarriers",
   async (_, { rejectWithValue }) => {
     try {
-      // Simulate axios call with setTimeout
-      const carriers = await new Promise<Carrier[]>((resolve) => {
-        setTimeout(() => {
-          resolve([
-            { id: "1", name: "State Farm" },
-            { id: "2", name: "Allstate" },
-            { id: "3", name: "Progressive" },
-            { id: "4", name: "Nationwide" },
-            { id: "5", name: "American General" },
-            { id: "6", name: "Jackson National" },
-            { id: "7", name: "Equitable" },
-            { id: "8", name: "Athene" },
-            { id: "9", name: "Voya" },
-            { id: "10", name: "Lincoln National" },
-          ]);
-        }, 500); // Simulate network delay
-      });
-
-      return carriers;
-    } catch (error) {
-      return rejectWithValue(
-        error instanceof Error ? error.message : "Failed to fetch carriers"
-      );
+      const res = await api.get<CarriersListResponse>("/api/admin/carriers");
+      if (!res.success) throw new Error("Failed to load carriers");
+      return res.data || [];
+    } catch (e) {
+      return rejectWithValue(e instanceof Error ? e.message : "Failed to fetch carriers");
     }
   }
 );
@@ -61,11 +68,12 @@ const carrierSlice = createSlice({
       })
       .addCase(fetchCarriers.fulfilled, (state, action) => {
         state.loading = false;
-        state.carriers = action.payload;
+        state.carriers = action.payload.length ? action.payload : FALLBACK_CARRIERS;
         state.error = null;
       })
       .addCase(fetchCarriers.rejected, (state, action) => {
         state.loading = false;
+        state.carriers = FALLBACK_CARRIERS;
         state.error = action.payload as string;
       });
   },

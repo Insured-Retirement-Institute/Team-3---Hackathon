@@ -18,72 +18,18 @@ import {
   Chip,
   Checkbox,
   Card,
-  CardContent
+  CardContent,
 } from "@mui/material";
 import {
   submitAgentTransferForm,
   setFormData,
   resetForm,
 } from "~/store/agentTransferSlice";
+import { fetchAdvisors } from "~/store/advisorsSlice";
+import { fetchPendingRequests } from "~/store/pendingRequestsSlice";
 import { fetchCarriers } from "~/store/carrierSlice";
 import type { RootState, AppDispatch } from "~/store/store";
-
-const US_STATES = [
-  "AL",
-  "AK",
-  "AZ",
-  "AR",
-  "CA",
-  "CO",
-  "CT",
-  "DE",
-  "FL",
-  "GA",
-  "HI",
-  "ID",
-  "IL",
-  "IN",
-  "IA",
-  "KS",
-  "KY",
-  "LA",
-  "ME",
-  "MD",
-  "MA",
-  "MI",
-  "MN",
-  "MS",
-  "MO",
-  "MT",
-  "NE",
-  "NV",
-  "NH",
-  "NJ",
-  "NM",
-  "NY",
-  "NC",
-  "ND",
-  "OH",
-  "OK",
-  "OR",
-  "PA",
-  "RI",
-  "SC",
-  "SD",
-  "TN",
-  "TX",
-  "UT",
-  "VT",
-  "VA",
-  "WA",
-  "WV",
-  "WI",
-  "WY",
-];
-
-
-
-
+import { US_STATE_CODES, stateCodeToName } from "~/lib/states";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -95,87 +41,88 @@ export function meta({}: Route.MetaArgs) {
 export default function Request() {
   const navigate = useNavigate();
   const dispatch = useDispatch<AppDispatch>();
-  const { formData, loading, error, success } = useSelector(
+  const { formData, loading, error, success, submissionIds } = useSelector(
     (state: RootState) => state.agentTransfer
   );
-  const { carriers, loading: carrierLoading } = useSelector(
-    (state: RootState) => state.carriers
+  const { advisors, loading: advisorsLoading } = useSelector(
+    (state: RootState) => state.advisors
+  );
+  const { carriers } = useSelector((state: RootState) => state.carriers);
+  const { requests: pendingRequests } = useSelector(
+    (state: RootState) => state.pendingRequests
   );
 
+  const inProgressStatuses = ["queued", "pending", "sent_to_carrier", "submitted"];
+  const inProgressAdvisorIds = new Set(
+    pendingRequests
+      .filter((r) => inProgressStatuses.includes((r.status || "").toLowerCase()))
+      .map((r) => r.advisor_id)
+  );
+  const availableAdvisors = advisors.filter((a) => !inProgressAdvisorIds.has(a.id));
+
   useEffect(() => {
+    dispatch(fetchAdvisors());
+    dispatch(fetchPendingRequests());
     dispatch(fetchCarriers());
   }, [dispatch]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
+  const handleAdvisorChange = (e: { target: { value: string } }) => {
+    dispatch(setFormData({ ...formData, advisor_id: e.target.value }));
+  };
+
+  const handleCarrierChange = (e: { target: { value: unknown } }) => {
+    const value = e.target.value;
     dispatch(
       setFormData({
         ...formData,
-        [name]: value,
+        carriers: typeof value === "string" ? value.split(",") : (value as string[]),
       })
     );
   };
 
-  const handleCarrierChange = (e: any) => {
-    const { value } = e.target;
+  const handleStatesChange = (e: { target: { value: unknown } }) => {
+    const value = e.target.value;
     dispatch(
       setFormData({
         ...formData,
-        carriers: typeof value === "string" ? value.split(",") : value,
+        states: typeof value === "string" ? value.split(",") : (value as string[]),
       })
     );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await dispatch(submitAgentTransferForm(formData));
+    await dispatch(
+      submitAgentTransferForm({
+        advisor_id: formData.advisor_id,
+        carriers: formData.carriers,
+        states: formData.states,
+      })
+    );
   };
 
   return (
-    <main className="min-h-screen bg-gray-50">
+    <main className="min-h-screen" style={{ backgroundColor: "#f5f5f5" }}>
       <Container maxWidth="lg" className="py-6">
-        <Box className="mb-8">
-          <Button
-            variant="text"
-            onClick={() => navigate("/")}
-            className="mb-4"
-          >
+        <Box className="mb-6">
+          <Button variant="text" onClick={() => navigate("/")} sx={{ color: "#003366", mb: 2 }}>
             ← Back
           </Button>
-          <Typography variant="h4" className="font-bold">
-            Agent Transfer Request
+          <Typography variant="h4" fontWeight="bold" color="text.primary">
+            New Transfer Request
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Select an agent and carriers to dispatch
           </Typography>
         </Box>
 
-        {/* Status Cards */}
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: {
-              xs: "1fr",
-              sm: "repeat(2, 1fr)",
-              md: "repeat(4, 1fr)",
-            },
-            gap: 2,
-            mb: 8,
-          }}
-        >
-        
-         
-        </Box>
-
-        {/* Form Section */}
-        <Card className="mb-8">
-          <CardContent>
-            <Typography variant="h6" className="font-bold mb-6">
-              Create New Transfer Request
+        <Card className="mb-6 shadow-sm">
+          <CardContent sx={{ pt: 3 }}>
+            <Typography variant="h6" fontWeight="600" color="text.primary" className="mb-4">
+              Create transfer request
             </Typography>
 
-            <Box
-              component="form"
-              onSubmit={handleSubmit}
-              className="space-y-6"
-            >
+            <Box component="form" onSubmit={handleSubmit} className="space-y-6">
               {error && (
                 <Alert severity="error" onClose={() => dispatch(resetForm())}>
                   {error}
@@ -183,160 +130,109 @@ export default function Request() {
               )}
 
               {success && (
-                <Alert
-                  severity="success"
-                  onClose={() => dispatch(resetForm())}
-                >
-                  Form submitted successfully! <Link to="/pending-transfers" className="underline">View status here</Link>
+                <Alert severity="success" onClose={() => dispatch(resetForm())}>
+                  Request submitted. Submission IDs: {submissionIds.join(", ")}.{" "}
+                  <Link to="/pending-transfers" className="underline font-medium">
+                    View pending transfers
+                  </Link>
                 </Alert>
               )}
 
-              {/* Agent ID and Transfer Date Row */}
-              <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
-                <Box>
-                  <TextField
-                    fullWidth
-                    label="Agent ID"
-                    name="agent"
-                    value={formData.agent}
-                    onChange={handleChange}
-                    required
-                    variant="outlined"
-                    placeholder="Search by name or NPN number..."
-                    disabled={loading}
-                  />
-                </Box>
-                <Box>
-                  <TextField
-                    fullWidth
-                    label="Transfer Date"
-                    type="date"
-                    InputLabelProps={{
-                      shrink: true,
-                    }}
-                    inputProps={{
-                      placeholder: "mm/dd/yyyy",
-                    }}
-                    variant="outlined"
-                    disabled={loading}
-                  />
-                </Box>
-              </Box>
-
-              {/* Carriers to Transfer */}
-              <FormControl fullWidth disabled={loading || carrierLoading} required>
-                <InputLabel>Carriers to Transfer</InputLabel>
+              <FormControl fullWidth required disabled={advisorsLoading || loading} sx={{ mt: 2, mb: 2 }}>
+                <InputLabel id="agent-label" shrink>Agent</InputLabel>
                 <Select
-                  multiple
-                  value={formData.carriers}
-                  onChange={handleCarrierChange}
-                  input={<OutlinedInput label="Carriers to Transfer" />}
-                  renderValue={(selected) => (
-                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
-                      {(selected as string[]).map((value) => (
-                        <Chip key={value} label={value} />
-                      ))}
-                    </Box>
-                  )}
-                  MenuProps={{
-                    PaperProps: {
-                      style: {
-                        maxHeight: 224,
-                      },
-                    },
-                  }}
+                  labelId="agent-label"
+                  value={formData.advisor_id}
+                  onChange={handleAdvisorChange}
+                  label="Agent"
+                  displayEmpty
+                  input={<OutlinedInput label="Agent" />}
                 >
-                  {carriers.map((carrier) => (
-                    <MenuItem key={carrier.id} value={carrier.name}>
-                      <Checkbox
-                        checked={formData.carriers.indexOf(carrier.name) > -1}
-                      />
-                      {carrier.name}
+                  <MenuItem value="">Select agent</MenuItem>
+                  {availableAdvisors.map((a) => (
+                    <MenuItem key={a.id} value={a.id}>
+                      {a.name || a.npn || a.id}
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
 
-              {/* Reason for Transfer */}
-              <TextField
-                fullWidth
-                label="Reason for Transfer"
-                multiline
-                rows={4}
-                variant="outlined"
-                placeholder="Explain reason for this transfer request"
-                disabled={loading}
-              />
-
-              {/* Action Buttons */}
-              <Box className="flex justify-end gap-3">
-                <Button
-                  variant="outlined"
-                  onClick={() => navigate("/")}
-                  disabled={loading}
+              <FormControl fullWidth disabled={loading} sx={{ mt: 2, mb: 2 }}>
+                <InputLabel id="carriers-label" shrink>Carriers</InputLabel>
+                <Select
+                  labelId="carriers-label"
+                  multiple
+                  value={formData.carriers}
+                  onChange={handleCarrierChange}
+                  input={<OutlinedInput label="Carriers" />}
+                  renderValue={(selected) => (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                      {(selected as string[]).map((id) => {
+                        const c = carriers.find((x) => x.id === id);
+                        return <Chip key={id} label={c ? c.name : id} size="small" />;
+                      })}
+                    </Box>
+                  )}
+                  MenuProps={{ PaperProps: { style: { maxHeight: 224 } } }}
                 >
+                  {carriers.map((c) => (
+                    <MenuItem key={c.id} value={c.id}>
+                      <Checkbox checked={formData.carriers.indexOf(c.id) > -1} />
+                      {c.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              <FormControl fullWidth disabled={loading} sx={{ mt: 2, mb: 2 }}>
+                <InputLabel id="states-label" shrink>States</InputLabel>
+                <Select
+                  labelId="states-label"
+                  multiple
+                  value={formData.states}
+                  onChange={handleStatesChange}
+                  input={<OutlinedInput label="States" />}
+                  renderValue={(selected) => (
+                    <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+                      {(selected as string[]).map((code) => (
+                        <Chip key={code} label={stateCodeToName(code)} size="small" />
+                      ))}
+                    </Box>
+                  )}
+                  MenuProps={{ PaperProps: { style: { maxHeight: 224 } } }}
+                >
+                  {US_STATE_CODES.map((code) => (
+                    <MenuItem key={code} value={code}>
+                      <Checkbox checked={formData.states.indexOf(code) > -1} />
+                      {stateCodeToName(code)}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              <Box className="flex justify-end gap-3 pt-2">
+                <Button variant="outlined" onClick={() => navigate("/")} disabled={loading} sx={{ color: "#003366", borderColor: "#003366" }}>
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   variant="contained"
-                  disabled={loading || carrierLoading}
+                  disabled={loading || advisorsLoading || !formData.advisor_id}
+                  sx={{ bgcolor: "#003366" }}
                 >
                   {loading ? (
                     <>
-                      <CircularProgress size={20} className="mr-2" />
+                      <CircularProgress size={20} sx={{ mr: 1 }} color="inherit" />
                       Submitting...
                     </>
                   ) : (
-                    "Submit Request"
+                    "Submit request"
                   )}
                 </Button>
               </Box>
             </Box>
           </CardContent>
         </Card>
-
-        {/* Recent Transfer Requests Table
-        <Card>
-          <CardContent>
-            <Typography variant="h6" className="font-bold mb-4">
-              Recent Transfer Requests
-            </Typography>
-
-            <TableContainer component={Paper}>
-              <Table>
-                <TableHead>
-                  <TableRow className="bg-gray-200">
-                    <TableCell className="font-semibold">Request ID</TableCell>
-                    <TableCell className="font-semibold">Agent Name</TableCell>
-                    <TableCell className="font-semibold">NPN Number</TableCell>
-                    <TableCell className="font-semibold">Carriers</TableCell>
-                    <TableCell className="font-semibold">Status</TableCell>
-                    <TableCell className="font-semibold">Transfer Date</TableCell>
-                    <TableCell className="font-semibold">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {recentRequests.map((request) => (
-                    <TableRow key={request.id} hover>
-                      <TableCell>{request.id}</TableCell>
-                      <TableCell>{request.agentName}</TableCell>
-                      <TableCell>{request.npnNumber}</TableCell>
-                      <TableCell>{request.carriers}</TableCell>
-                      <TableCell>{request.status}</TableCell>
-                      <TableCell>{request.transferDate}</TableCell>
-                      <TableCell>
-                        <Button variant="text" size="small">
-                          View
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          </CardContent>
-        </Card> */}
       </Container>
     </main>
   );
