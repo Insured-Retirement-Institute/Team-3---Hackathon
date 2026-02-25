@@ -1,11 +1,12 @@
 """
 Document Extraction API - Pass-through to python-ocr-demo
 """
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query
 from fastapi.responses import JSONResponse
 import httpx
 import os
 import logging
+from src.services.sns_service import sns_service
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,15 @@ OCR_SERVICE_URL = os.getenv("OCR_SERVICE_URL", "http://localhost:8000")
 
 
 @router.post("/extract")
-async def extract_document(file: UploadFile = File(...)):
+async def extract_document(
+    file: UploadFile = File(...),
+    send_notification: bool = Query(False, description="Send SNS notification when processing completes")
+):
     """
     Extract structured JSON from PDF, Excel, and Image files.
     Pass-through endpoint to python-ocr-demo API.
+    
+    Optional: Set send_notification=true to receive SNS notification when complete.
     """
     try:
         logger.info(f"📤 Processing file: {file.filename}")
@@ -113,6 +119,24 @@ async def extract_document(file: UploadFile = File(...)):
             "pages_analyzed": result.get('pages_analyzed', 0),
             "notes": result.get('notes', '')
         }
+        
+        # Send SNS notification if requested
+        if send_notification and sns_service.enabled:
+            try:
+                advisor_name = result.get('form_data', {}).get('full_name') or \
+                              result.get('form_data', {}).get('name') or \
+                              result.get('form_data', {}).get('advisor_name')
+                
+                await sns_service.send_document_processed_notification(
+                    filename=file.filename,
+                    advisor_name=advisor_name,
+                    form_fields_count=len(result.get('form_data', {})),
+                    highlighted_items_count=len(highlighted_items),
+                    status="processed"
+                )
+                logger.info(f"✅ SNS notification sent for document: {file.filename}")
+            except Exception as e:
+                logger.warning(f"Failed to send SNS notification: {e}")
         
         return JSONResponse(response_data)
     

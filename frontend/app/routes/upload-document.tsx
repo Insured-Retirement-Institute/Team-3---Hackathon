@@ -59,6 +59,8 @@ export default function UploadDocument() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null);
+  const [transferring, setTransferring] = useState(false);
+  const [transferSuccess, setTransferSuccess] = useState<string | null>(null);
   
   // Track edited fields
   const [editedFields, setEditedFields] = useState<Record<string, string>>({});
@@ -181,28 +183,68 @@ export default function UploadDocument() {
   };
 
   const handleApproveAll = () => {
-    if (!extractedData) return;
-    const allKeys = Object.keys(extractedData.data.form_fields);
+    if (!extractedData || !extractedData.data) return;
+    const allKeys = Object.keys(extractedData.data.form_fields || {});
     setApprovedFields(new Set(allKeys));
   };
 
+  const handleTransferAgents = async () => {
+    if (!extractedData || !extractedData.data) return;
+    
+    setTransferring(true);
+    setError(null);
+    setTransferSuccess(null);
+
+    try {
+      // Get all form fields (approved or not) to ensure we have name/npn
+      const allFormFields: Record<string, string> = {};
+      Object.entries(extractedData.data.form_fields || {}).forEach(([key, value]) => {
+        allFormFields[key] = getFieldValue(key, value);
+      });
+
+      // Log what we're sending for debugging
+      console.log('Sending form fields:', allFormFields);
+
+      // Call transfer API
+      const response = await api.post('/api/admin/transfer-from-document', {
+        form_fields: allFormFields,
+        carriers: ["1", "2"], // Default carriers - can be made configurable
+        states: [], // Will use license states from form or defaults
+        transfer_immediately: true
+      });
+
+      if (response.success) {
+        setTransferSuccess(`Agent created successfully! ID: ${response.advisor_id}`);
+        
+        // Navigate to agent list after 2 seconds
+        setTimeout(() => {
+          navigate('/');
+        }, 2000);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to transfer agent. Please try again.');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   const handleExportApproved = () => {
-    if (!extractedData) return;
+    if (!extractedData || !extractedData.data) return;
     
     const approvedData: Record<string, string> = {};
     Array.from(approvedFields).forEach((key) => {
-      approvedData[key] = getFieldValue(key, extractedData.data.form_fields[key]);
+      approvedData[key] = getFieldValue(key, extractedData.data?.form_fields?.[key] || '');
     });
 
     const exportData = {
       filename: extractedData.filename,
       approved_fields: approvedData,
-      highlighted_items: extractedData.data.highlighted_items,
-      background_info: extractedData.data.background_info,
+      highlighted_items: extractedData.data?.highlighted_items || [],
+      background_info: extractedData.data?.background_info || {},
       confidence: extractedData.confidence,
       pages_analyzed: extractedData.pages_analyzed,
       approved_count: approvedFields.size,
-      total_count: Object.keys(extractedData.data.form_fields).length
+      total_count: Object.keys(extractedData.data?.form_fields || {}).length
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -298,6 +340,12 @@ export default function UploadDocument() {
               </Alert>
             )}
 
+            {transferSuccess && (
+              <Alert severity="success" className="mt-4" onClose={() => setTransferSuccess(null)}>
+                {transferSuccess}
+              </Alert>
+            )}
+
             <Box className="flex justify-center gap-3 mt-6">
               <Button
                 variant="outlined"
@@ -321,7 +369,7 @@ export default function UploadDocument() {
         </Card>
 
         {/* Results Section */}
-        {extractedData && (
+        {extractedData && extractedData.data && (
           <Card>
             <CardContent>
               <Box className="flex justify-between items-center mb-4">
@@ -357,7 +405,7 @@ export default function UploadDocument() {
                       Form Fields
                     </Typography>
                     <Typography variant="h4" className="font-bold">
-                      {Object.keys(extractedData.data.form_fields || {}).length}
+                      {Object.keys(extractedData.data?.form_fields || {}).length}
                     </Typography>
                   </CardContent>
                 </Card>
@@ -368,7 +416,7 @@ export default function UploadDocument() {
                       Agent Carriers
                     </Typography>
                     <Typography variant="h4" className="font-bold">
-                      {(extractedData.data.highlighted_items || []).length}
+                      {(extractedData.data?.highlighted_items || []).length}
                     </Typography>
                   </CardContent>
                 </Card>
@@ -379,7 +427,7 @@ export default function UploadDocument() {
                       Background Info
                     </Typography>
                     <Typography variant="h4" className="font-bold">
-                      {Object.keys(extractedData.data.background_info || {}).length}
+                      {Object.keys(extractedData.data?.background_info || {}).length}
                     </Typography>
                   </CardContent>
                 </Card>
@@ -406,11 +454,11 @@ export default function UploadDocument() {
               </Box>
 
               {/* Form Fields */}
-              {Object.keys(extractedData.data.form_fields || {}).length > 0 && (
+              {Object.keys(extractedData.data?.form_fields || {}).length > 0 && (
                 <Box className="mb-4">
                   <Box className="flex justify-between items-center mb-2">
                     <Typography variant="subtitle1" className="font-semibold">
-                      Form Fields ({approvedFields.size}/{Object.keys(extractedData.data.form_fields).length} approved)
+                      Form Fields ({approvedFields.size}/{Object.keys(extractedData.data?.form_fields || {}).length} approved)
                     </Typography>
                     <Box className="flex gap-2">
                       <Button
@@ -425,16 +473,17 @@ export default function UploadDocument() {
                       <Button
                         size="small"
                         variant="contained"
-                        onClick={handleExportApproved}
-                        disabled={approvedFields.size === 0}
+                        onClick={handleTransferAgents}
+                        disabled={approvedFields.size === 0 || transferring}
+                        startIcon={transferring ? <CircularProgress size={16} color="inherit" /> : undefined}
                         sx={{ bgcolor: "#003366", '&:hover': { bgcolor: "#002244" } }}
                       >
-                        Transfer Agents
+                        {transferring ? 'Transferring...' : 'Transfer Agent'}
                       </Button>
                     </Box>
                   </Box>
                   <Box className="space-y-2">
-                    {Object.entries(extractedData.data.form_fields).map(([key, value]) => {
+                    {Object.entries(extractedData.data?.form_fields || {}).map(([key, value]) => {
                       const isEditing = editingField === key;
                       const isApproved = approvedFields.has(key);
                       const displayValue = getFieldValue(key, value);
@@ -536,18 +585,18 @@ export default function UploadDocument() {
               )}
 
               {/* Agent Carriers */}
-              {(extractedData.data.highlighted_items || []).length > 0 && (
+              {(extractedData.data?.highlighted_items || []).length > 0 && (
                 <Box className="mb-4">
                   <Box className="flex justify-between items-center mb-2">
                     <Typography variant="subtitle1" className="font-semibold">
-                      Agent Carriers ({approvedHighlightedItems.size}/{extractedData.data.highlighted_items.length} approved)
+                      Agent Carriers ({approvedHighlightedItems.size}/{(extractedData.data?.highlighted_items || []).length} approved)
                     </Typography>
                     <Button
                       size="small"
                       variant="outlined"
                       onClick={() => {
                         setApprovedHighlightedItems(
-                          new Set(extractedData.data.highlighted_items.map((_, i) => i))
+                          new Set((extractedData.data?.highlighted_items || []).map((_, i) => i))
                         );
                       }}
                       startIcon={<CheckCircle />}
@@ -556,7 +605,7 @@ export default function UploadDocument() {
                     </Button>
                   </Box>
                   <Box className="flex gap-2 flex-wrap">
-                    {extractedData.data.highlighted_items.map((item, index) => {
+                    {(extractedData.data?.highlighted_items || []).map((item, index) => {
                       const isApproved = approvedHighlightedItems.has(index);
                       return (
                         <Chip
@@ -582,18 +631,18 @@ export default function UploadDocument() {
               )}
 
               {/* Background Info */}
-              {Object.keys(extractedData.data.background_info || {}).length > 0 && (
+              {Object.keys(extractedData.data?.background_info || {}).length > 0 && (
                 <Box className="mb-4">
                   <Box className="flex justify-between items-center mb-2">
                     <Typography variant="subtitle1" className="font-semibold">
-                      Background Information ({approvedBackgroundInfo.size}/{Object.keys(extractedData.data.background_info).length} approved)
+                      Background Information ({approvedBackgroundInfo.size}/{Object.keys(extractedData.data?.background_info || {}).length} approved)
                     </Typography>
                     <Button
                       size="small"
                       variant="outlined"
                       onClick={() => {
                         setApprovedBackgroundInfo(
-                          new Set(Object.keys(extractedData.data.background_info))
+                          new Set(Object.keys(extractedData.data?.background_info || {}))
                         );
                       }}
                       startIcon={<CheckCircle />}
@@ -602,7 +651,7 @@ export default function UploadDocument() {
                     </Button>
                   </Box>
                   <Box className="space-y-2">
-                    {Object.entries(extractedData.data.background_info).map(([key, value]) => {
+                    {Object.entries(extractedData.data?.background_info || {}).map(([key, value]) => {
                       const isApproved = approvedBackgroundInfo.has(key);
                       const displayValue = value;
 

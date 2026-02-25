@@ -22,6 +22,7 @@ from src.services.carrier_transform_service import (
     get_last_transform_error,
     BUILTIN_NESTED_FORMAT_YAML,
 )
+from src.services.sns_service import sns_service
 
 # Built-in flat format YAML so UI can display it for carriers without custom YAML
 BUILTIN_FLAT_FORMAT_YAML = """# Standard carrier template (flat)
@@ -90,6 +91,15 @@ class CreateAndTransferRequest(BaseModel):
     agent: AdvisorCreateRequest
     carriers: List[str] = Field(default_factory=list, description="Carrier IDs e.g. ['1','2','3']")
     states: List[str] = Field(default_factory=list, description="State codes e.g. ['AL','CA']")
+    carrier_base_url: Optional[str] = None
+
+
+class TransferFromDocumentRequest(BaseModel):
+    """Create agent from document extraction and optionally transfer to carriers."""
+    form_fields: dict = Field(..., description="Extracted form fields from document")
+    carriers: List[str] = Field(default_factory=list, description="Carrier IDs e.g. ['1','2','3']")
+    states: List[str] = Field(default_factory=list, description="State codes e.g. ['AL','CA']")
+    transfer_immediately: bool = Field(True, description="If true, transfer to carriers immediately")
     carrier_base_url: Optional[str] = None
 
 
@@ -373,11 +383,250 @@ async def create_agent_and_transfer(body: CreateAndTransferRequest, background_t
 
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
+    # Send SNS notification for agent transfer
+    if sns_service.enabled:
+        try:
+            advisor_name = f"{advisor.get('first_name', '')} {advisor.get('last_name', '')}".strip() or "Unknown Advisor"
+            carrier_names = [get_carrier_name(cid) for cid in carrier_ids]
+            carriers_str = ", ".join(carrier_names)
+            states_str = ", ".join(states_list)
+            
+            await sns_service.send_custom_notification(
+                subject=f"Agent Transfer Created - {advisor_name}",
+                message_data={
+                    "event": "agent_transfer_created",
+                    "advisor_id": advisor_id,
+                    "advisor_name": advisor_name,
+                    "carriers": carrier_names,
+                    "states": states_list,
+                    "submission_count": len(submission_ids),
+                    "status": "sent_to_carrier"
+                },
+                notification_type="AgentTransfer"
+            )
+            logger.info(f"✅ SNS notification sent for agent transfer: {advisor_name} to {carriers_str}")
+        except Exception as e:
+            logger.warning(f"Failed to send SNS notification for agent transfer: {e}")
+
     return {
         "success": True,
         "advisor_id": advisor_id,
         "submission_ids": submission_ids,
         "status": "queued",
+    }
+
+
+@router.post("/transfer-from-document")
+async def transfer_agent_from_document(body: TransferFromDocumentRequest):
+    """
+    Create agent from extracted document data and optionally transfer to carriers.
+    Maps extracted form fields to agent structure and creates/transfers in one call.
+    """
+    use_json = os.getenv("USE_JSON_STORE", "true").lower() in {"1", "true", "yes"}
+    if not use_json:
+        raise HTTPException(400, "transfer-from-document is only supported when USE_JSON_STORE=true")
+    
+    # Map extracted form fields to agent structure
+    form_fields = body.form_fields
+    
+    # Log received fields for debugging
+    logger.info(f"📋 Received form fields: {list(form_fields.keys())}")
+    
+    # Common field mappings from various document types
+    def get_field(keys: List[str], default: str = "") -> str:
+        """Try multiple field name variations (case-insensitive)"""
+        # Try exact matches first
+        for key in keys:
+            value = form_fields.get(key)
+            if value and value not in ["(empty)", "(not specified)", "", None]:
+                logger.info(f"✓ Found field '{key}' = '{value}'")
+                return str(value).strip()
+        
+        # Try case-insensitive matches
+        form_fields_lower = {k.lower(): v for k, v in form_fields.items()}
+        for key in keys:
+            value = form_fields_lower.get(key.lower())
+            if value and value not in ["(empty)", "(not specified)", "", None]:
+                logger.info(f"✓ Found field '{key}' (case-insensitive) = '{value}'")
+                return str(value).strip()
+        
+        return default
+    
+    # Extract agent data from form fields with extensive variations
+    agent_data = {
+        "npn": get_field([
+            "npn", "NPN", "National Producer Number", "producer_number", "license_number",
+            "Producer Number", "License Number", "Agent Number", "agent_number"
+        ]),
+        "first_name": get_field([
+            "first_name", "First Name", "given_name", "fname", "FirstName",
+            "Given Name", "first", "First", "name_first"
+        ]),
+        "last_name": get_field([
+            "last_name", "Last Name", "surname", "family_name", "lname", "LastName",
+            "Family Name", "last", "Last", "name_last"
+        ]),
+        "email": get_field([
+            "email", "Email", "email_address", "Email Address", "e-mail", "E-Mail",
+            "EmailAddress", "contact_email"
+        ]),
+        "phone": get_field([
+            "phone", "Phone", "phone_number", "Phone Number", "telephone", "Telephone",
+            "PhoneNumber", "contact_phone", "mobile", "Mobile"
+        ]),
+        "broker_dealer": get_field([
+            "broker_dealer", "Broker Dealer", "broker/dealer", "firm_name", "Firm Name",
+            "BrokerDealer", "firm", "Firm", "company", "Company", "Company Name"
+        ]),
+        "license_states": [],
+        "status": "pending",
+    }
+    
+    # Handle full name if first/last not separate - try many variations
+    full_name = get_field([
+        "full_name", "name", "Name", "Full Name", "FullName",
+        "agent_name", "Agent Name", "advisor_name", "Advisor Name",
+        "applicant_name", "Applicant Name"
+    ])
+    if full_name and not (agent_data["first_name"] and agent_data["last_name"]):
+        # Try to split name intelligently
+        parts = full_name.split(maxsplit=1)
+        if len(parts) >= 2:
+            agent_data["first_name"] = parts[0]
+            agent_data["last_name"] = parts[1]
+            logger.info(f"✓ Split full name: '{full_name}' → first='{parts[0]}', last='{parts[1]}'")
+        elif len(parts) == 1:
+            agent_data["last_name"] = parts[0]
+            logger.info(f"✓ Using single name as last name: '{parts[0]}'")
+    
+    # Extract license states from form fields
+    license_states_str = get_field([
+        "license_states", "License States", "licensed_states", 
+        "states_licensed", "state_licenses", "State Licenses"
+    ])
+    if license_states_str:
+        # Split by common delimiters and clean
+        import re
+        states = re.split(r'[,;\s]+', license_states_str)
+        agent_data["license_states"] = [s.strip().upper() for s in states if s.strip()]
+    
+    # Log what we extracted
+    logger.info(f"📊 Extracted agent data: first_name='{agent_data['first_name']}', last_name='{agent_data['last_name']}', npn='{agent_data['npn']}'")
+    
+    # Validate required fields
+    if not agent_data["npn"]:
+        available_fields = ", ".join(list(form_fields.keys())[:10])
+        raise HTTPException(
+            400, 
+            f"NPN is required. Could not extract from form fields. Available fields: {available_fields}"
+        )
+    
+    if not (agent_data["first_name"] or agent_data["last_name"]):
+        # Show what fields we received to help debug
+        available_fields = ", ".join(list(form_fields.keys())[:10])
+        raise HTTPException(
+            400, 
+            f"Name is required. Could not extract from form fields. Available fields: {available_fields}"
+        )
+    
+    # If we only have last name, use it as both
+    if agent_data["last_name"] and not agent_data["first_name"]:
+        agent_data["first_name"] = agent_data["last_name"]
+        logger.info(f"⚠️ Only last name found, using as both first and last: '{agent_data['last_name']}'")
+    
+    # Check if advisor already exists (by NPN)
+    existing_advisors = json_store.list_advisors()
+    existing_advisor = None
+    for adv in existing_advisors:
+        if adv.get("npn") == agent_data["npn"]:
+            existing_advisor = adv
+            break
+    
+    # Create or use existing advisor
+    if existing_advisor:
+        advisor_id = str(existing_advisor.get("id"))
+        advisor = existing_advisor
+        logger.info(f"✓ Found existing advisor with NPN {agent_data['npn']}: {advisor_id}")
+        # Note: We could update the existing advisor here if needed
+    else:
+        try:
+            advisor_id = json_store.create_advisor(agent_data)
+            advisor = json_store.get_advisor(advisor_id)
+            logger.info(f"✓ Created new advisor: {advisor_id}")
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+    
+    if not advisor:
+        raise HTTPException(500, "Advisor created but not found")
+    
+    # If transfer requested, submit to carriers
+    submission_ids: List[str] = []
+    if body.transfer_immediately and body.carriers:
+        carrier_ids = body.carriers
+        states_list = body.states or agent_data["license_states"] or ["CA", "TX"]
+        carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
+        
+        for carrier_id in carrier_ids:
+            carrier_format = get_default_template(carrier_id)
+            if carrier_format == "nested":
+                carrier_format = "nested"
+            else:
+                carrier_format = "flat"
+            
+            for one_state in states_list:
+                submitted_states_single = [one_state]
+                payload, format_used, _ = await _build_payload_for_carrier(
+                    advisor, carrier_id, carrier_format, submitted_states_single
+                )
+                submission_id = json_store.create_submission(
+                    {
+                        "advisor_id": str(advisor.get("id")),
+                        "carrier_id": carrier_id,
+                        "integration_method": "api",
+                        "status": "queued",
+                        "request_data": {
+                            "carrier_format": format_used,
+                            "payload": payload,
+                            "submitted_states": submitted_states_single,
+                        },
+                    }
+                )
+                submission_ids.append(submission_id)
+        
+        # Dispatch submissions
+        await dispatch_carrier_submissions(submission_ids, carrier_base_url)
+        
+        # Send SNS notification
+        if sns_service.enabled:
+            try:
+                advisor_name = f"{advisor.get('first_name', '')} {advisor.get('last_name', '')}".strip() or "Unknown Advisor"
+                carrier_names = [get_carrier_name(cid) for cid in carrier_ids]
+                
+                await sns_service.send_custom_notification(
+                    subject=f"Agent Transfer from Document - {advisor_name}",
+                    message_data={
+                        "event": "agent_transfer_from_document",
+                        "advisor_id": advisor_id,
+                        "advisor_name": advisor_name,
+                        "carriers": carrier_names,
+                        "states": states_list,
+                        "submission_count": len(submission_ids),
+                        "source": "document_upload",
+                        "status": "sent_to_carrier"
+                    },
+                    notification_type="AgentTransferFromDocument"
+                )
+                logger.info(f"✅ SNS notification sent for document transfer: {advisor_name}")
+            except Exception as e:
+                logger.warning(f"Failed to send SNS notification for document transfer: {e}")
+    
+    return {
+        "success": True,
+        "advisor_id": advisor_id,
+        "agent_data": agent_data,
+        "submission_ids": submission_ids if body.transfer_immediately else [],
+        "status": "sent_to_carrier" if body.transfer_immediately else "created",
+        "extracted_fields": list(form_fields.keys())
     }
 
 
@@ -588,6 +837,34 @@ async def dispatch_advisor_to_all_carriers(
     carrier_base_url = body.carrier_base_url or os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
 
+    # Send SNS notification for dispatch-all
+    if sns_service.enabled:
+        try:
+            if db is None:
+                advisor_name = f"{advisor.get('first_name', '')} {advisor.get('last_name', '')}".strip() or "Unknown Advisor"
+            else:
+                advisor_name = f"{advisor.first_name or ''} {advisor.last_name or ''}".strip() or "Unknown Advisor"
+            
+            carrier_ids = [c.carrier_id for c in carriers]
+            carrier_names = [get_carrier_name(cid) for cid in carrier_ids]
+            carriers_str = ", ".join(carrier_names)
+            
+            await sns_service.send_custom_notification(
+                subject=f"Agent Dispatched to Multiple Carriers - {advisor_name}",
+                message_data={
+                    "event": "agent_dispatch_all",
+                    "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
+                    "advisor_name": advisor_name,
+                    "carriers": carrier_names,
+                    "submission_count": len(submission_ids),
+                    "status": "sent_to_carrier"
+                },
+                notification_type="AgentDispatchAll"
+            )
+            logger.info(f"✅ SNS notification sent for dispatch-all: {advisor_name} to {carriers_str}")
+        except Exception as e:
+            logger.warning(f"Failed to send SNS notification for dispatch-all: {e}")
+
     return {
         "success": True,
         "advisor_id": str(advisor.get("id")) if db is None else str(advisor.id),
@@ -715,6 +992,27 @@ async def submit_advisor_to_carrier(
 
     carrier_base_url = os.getenv("CARRIER_BASE_URL", "http://localhost:8000")
     background_tasks.add_task(dispatch_carrier_submissions, submission_ids, carrier_base_url)
+
+    # Send SNS notification for carrier submission
+    if sns_service.enabled:
+        try:
+            if db is None:
+                advisor_name = f"{advisor.get('first_name', '')} {advisor.get('last_name', '')}".strip() or "Unknown Advisor"
+            else:
+                advisor_name = f"{advisor.first_name or ''} {advisor.last_name or ''}".strip() or "Unknown Advisor"
+            
+            # Get carrier name from registry
+            carrier_name = get_carrier_name(body.carrier_id)
+            states_str = ", ".join(body.submitted_states or [])
+            
+            await sns_service.send_carrier_submission_notification(
+                advisor_name=advisor_name,
+                carrier_name=carrier_name,
+                status="submitted"
+            )
+            logger.info(f"✅ SNS notification sent for carrier submission: {advisor_name} to {carrier_name} ({states_str})")
+        except Exception as e:
+            logger.warning(f"Failed to send SNS notification for carrier submission: {e}")
 
     return {
         "success": True,

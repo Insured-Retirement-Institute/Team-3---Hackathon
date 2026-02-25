@@ -104,6 +104,7 @@ Use **`carrier_format_examples/bedrock-test-format.yaml`**. That YAML describes 
 
 Other example YAMLs: `carrier-a.example.yaml` (flat shape), `carrier-b.example.yaml` (nested shape: meta/agent/appointment).
 
+<<<<<<< Updated upstream
 ## Async carrier dispatch (background only)
 
 Carrier API calls run **only in the background**. Create-and-transfer, dispatch-all, and submit return immediately with `status: "queued"` and `submission_ids`; the actual HTTP calls to the carrier happen asynchronously.
@@ -134,11 +135,74 @@ When a **transfer request is created** (create-and-transfer, dispatch-all, or su
 | **YAML format** | Loaded **at request time** from `carrier_formats_store.load_carrier_format(carrier_id)` → reads `backend/local_data/carrier_formats/{carrier_id}.yaml`. |
 
 So: **add or update a carrier format (YAML) before creating a transfer**; the next transfer that includes that carrier will use the current YAML from disk. No restart needed. For carriers with custom YAML, Bedrock is invoked with that YAML + advisor + states to produce the JSON request body; for flat/nested without custom YAML, the built-in builders (or Bedrock with built-in nested YAML) are used.
+=======
+## AWS SNS Notifications
+
+The API includes built-in support for sending notifications via **AWS SNS (Simple Notification Service)**:
+
+- **Automatic notifications** when agents are transferred to carriers
+- **Automatic notifications** when agents are dispatched to multiple carriers  
+- **Automatic notifications** for single carrier submissions
+- Optional notifications when documents are processed
+- Custom notifications for workflow events
+
+### Automatic Triggers
+
+SNS notifications are **automatically sent** for:
+- `POST /api/admin/create-and-transfer` - Agent created and transferred
+- `POST /api/admin/advisors/{id}/carriers/dispatch-all` - Dispatched to multiple carriers
+- `POST /api/admin/advisors/{id}/carriers/{carrier_id}/submit` - Single carrier submission
+
+See [SNS_TRIGGERS.md](SNS_TRIGGERS.md) for complete trigger documentation.
+
+### Quick Setup
+
+1. **Configure AWS credentials and SNS topic in `.env`:**
+   ```env
+   AWS_REGION=us-east-1
+   AWS_ACCESS_KEY_ID=your_access_key
+   AWS_SECRET_ACCESS_KEY=your_secret_key
+   SNS_TOPIC_ARN=arn:aws:sns:us-east-1:123456789:your-topic
+   SNS_ENABLED=true
+   ```
+
+2. **Test SNS:**
+   ```bash
+   cd backend
+   .venv/bin/python test_sns.py
+   ```
+
+3. **API Endpoints:** All SNS endpoints are under `/api/notifications`. See interactive docs at `http://localhost:8000/docs#/Notifications`.
+
+4. **Full documentation:** See [SNS_SETUP.md](SNS_SETUP.md) for complete setup instructions, API reference, and examples.
+
+### Example Usage
+
+Send notification when document is processed:
+```bash
+curl -X POST "http://localhost:8000/api/extract?send_notification=true" \
+  -F "file=@advisor_form.pdf"
+```
+
+Send custom notification:
+```bash
+curl -X POST "http://localhost:8000/api/notifications/send" \
+  -H "Content-Type: application/json" \
+  -d '{"subject": "Test", "message": "Hello from API"}'
+```
+>>>>>>> Stashed changes
 
 ## Environment
 
 - `USE_JSON_STORE` — set to `true` (default) to use local JSON files under `local_data/`; set to `false` to use a database (set `DATABASE_URL`).
 - `S3_BUCKET` — optional; if set, advisor file uploads go to S3; if unset, uploads are stored under `local_data/uploads/` for local dev.
 - `CARRIER_BASE_URL` — base URL for carrier API calls (default: http://localhost:8000).
+<<<<<<< Updated upstream
 - `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform. If you see "on-demand throughput isn't supported", your account may require an **inference profile** ARN instead of the model ID (set this env to the profile ARN from the Bedrock console). The code will try fallback models and log at INFO when one succeeds.
 - `AWS_REGION` — used for Bedrock (default: us-east-1).
+=======
+- `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform (default: `anthropic.claude-3-5-sonnet-v2:0`).
+- `AWS_REGION` — used for Bedrock and SNS (default: us-east-1).
+- `SNS_TOPIC_ARN` — optional; ARN of SNS topic for notifications.
+- `SNS_ENABLED` — optional; set to `true` to enable SNS notifications (default: false).
+>>>>>>> Stashed changes
