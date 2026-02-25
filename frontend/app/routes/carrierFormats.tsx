@@ -274,26 +274,68 @@ export default function CarrierFormats() {
         <Card className="mb-6 shadow-sm">
           <CardContent sx={{ pt: 3 }}>
             <Typography variant="h6" fontWeight="600" color="text.primary" className="mb-2">
-              Stored formats
+              Known Carrier Formats
             </Typography>
-            <Typography variant="body2" color="text.secondary" className="mb-2">
-              Carriers with a format configured. The ID (e.g. carrier-c) is used in the API and in payloads; the name (e.g. Principal) is for display. Template: custom_yaml when you uploaded a YAML, else the default (flat / nested).
-            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Will update this to pull from data source 
+          </Typography>
             {loadingList ? (
               <Box className="flex justify-center py-4"><CircularProgress /></Box>
             ) : carriers.length === 0 ? (
               <Typography color="text.secondary">None yet. Upload a YAML above.</Typography>
             ) : (
-              <List dense>
-                {carriers.map((c) => (
-                  <ListItem key={c.carrier_id}>
-                    <ListItemText
-                      primary={c.name}
-                      secondary={`${c.carrier_id} • Template: ${c.template_used ?? "custom_yaml"}${c.default_template ? ` (default: ${c.default_template})` : ""}`}
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              <Box sx={{ overflowX: "auto" }}>
+                <Box
+                  component="table"
+                  sx={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  <Box component="thead">
+                    <Box component="tr" sx={{ borderBottom: "2px solid #ddd", backgroundColor: "#fafafa" }}>
+                      <Box component="th" sx={{ padding: "12px", textAlign: "left", fontWeight: "600" }}>
+                        Carrier Name
+                      </Box>
+                      <Box component="th" sx={{ padding: "12px", textAlign: "left", fontWeight: "600" }}>
+                        Carrier ID
+                      </Box>
+                      <Box component="th" sx={{ padding: "12px", textAlign: "left", fontWeight: "600" }}>
+                        Template
+                      </Box>
+                      <Box component="th" sx={{ padding: "12px", textAlign: "left", fontWeight: "600" }}>
+                        Default Template
+                      </Box>
+                    </Box>
+                  </Box>
+                  <Box component="tbody">
+                    {carriers.map((c) => (
+                      <Box
+                        component="tr"
+                        key={c.carrier_id}
+                        sx={{
+                          borderBottom: "1px solid #eee",
+                          "&:hover": { backgroundColor: "#f9f9f9" },
+                        }}
+                      >
+                        <Box component="td" sx={{ padding: "12px" }}>
+                          {c.name}
+                        </Box>
+                        <Box component="td" sx={{ padding: "12px", fontFamily: "monospace", fontSize: "0.8rem" }}>
+                          {c.carrier_id}
+                        </Box>
+                        <Box component="td" sx={{ padding: "12px" }}>
+                          {c.template_used ?? "custom_yaml"}
+                        </Box>
+                        <Box component="td" sx={{ padding: "12px" }}>
+                          {c.default_template || "—"}
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              </Box>
             )}
           </CardContent>
         </Card>
@@ -355,7 +397,7 @@ export default function CarrierFormats() {
               Standard carrier template {sampleTemplateName ? `(${sampleTemplateName})` : "(flat)"}
             </Typography>
             <Typography variant="body2" color="text.secondary" className="mb-2">
-              Reference shape. Upload carrier-specific YAMLs for different formats; Bedrock will map agent data to the uploaded shape.
+              Reference shape. Upload carrier-specific YAMLs for different formats.
             </Typography>
             {loadingSample ? (
               <Box className="flex justify-center py-4"><CircularProgress /></Box>

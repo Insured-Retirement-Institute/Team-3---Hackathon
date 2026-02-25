@@ -98,14 +98,14 @@ export default function ActionPage() {
               mb: 4,
             }}
           >
-            <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/advisors/new")}>
+            {/* <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/advisors/new")}>
               <CardContent sx={{ textAlign: "center", py: 4 }}>
                 <PersonAdd sx={{ fontSize: 48, color: "#003366", mb: 1 }} />
                 <Typography variant="h6" fontWeight="600" color="text.primary">New agent</Typography>
                 <Typography variant="body2" color="text.secondary">Add an agent with details or upload a document</Typography>
               </CardContent>
-            </Card>
-            <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/request")}>
+            </Card> */}
+            <Card className="shadow-sm hover:shadow transition-shadow cursor-pointer" onClick={() => navigate("/create-and-transfer")}>
               <CardContent sx={{ textAlign: "center", py: 4 }}>
                 <AddCircle sx={{ fontSize: 48, color: "#003366", mb: 1 }} />
                 <Typography variant="h6" fontWeight="600" color="text.primary">New transfer request</Typography>
