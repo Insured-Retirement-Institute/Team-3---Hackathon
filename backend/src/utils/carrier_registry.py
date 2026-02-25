@@ -41,12 +41,17 @@ def get_carrier_name(carrier_id: str) -> str:
     return CARRIER_NAMES.get(carrier_id) or _LEGACY_NAMES.get(carrier_id, carrier_id)
 
 
-# Reverse: name (normalized lower) -> carrier id, for resolving "Principal" -> "3"
+# Reverse: name (normalized lower) -> carrier id. Prefer numeric IDs (1-8) over legacy (carrier-a etc.).
 def _name_to_id_map() -> dict[str, str]:
     out: dict[str, str] = {}
-    for cid, name in {**CARRIER_NAMES, **_LEGACY_NAMES}.items():
+    for cid, name in CARRIER_NAMES.items():
         if name:
             out[name.strip().lower()] = cid
+    for cid, name in _LEGACY_NAMES.items():
+        if name:
+            key = name.strip().lower()
+            if key not in out:
+                out[key] = cid
     return out
 
 
@@ -54,14 +59,17 @@ _NAME_TO_ID = _name_to_id_map()
 
 
 def get_carrier_id_by_name(name: str) -> str | None:
-    """Resolve a carrier name or id to carrier id. Returns None if not found."""
+    """Resolve a carrier name or id to carrier id. Prefer numeric id (1-8) over legacy (carrier-a)."""
     if not name or not isinstance(name, str):
         return None
     s = name.strip()
     if not s:
         return None
-    if s in CARRIER_NAMES or s in _LEGACY_NAMES:
+    if s in CARRIER_NAMES:
         return s
+    if s in _LEGACY_NAMES:
+        canonical = _NAME_TO_ID.get(_LEGACY_NAMES[s].strip().lower())
+        return canonical if canonical else s
     return _NAME_TO_ID.get(s.lower())
 
 
