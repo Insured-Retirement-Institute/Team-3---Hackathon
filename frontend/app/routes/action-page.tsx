@@ -15,7 +15,7 @@ import {
   AppBar,
   Toolbar,
 } from "@mui/material";
-import { AddCircle, List, CloudUpload, Refresh, PersonAdd } from "@mui/icons-material";
+import { AddCircle, List, CloudUpload, Refresh } from "@mui/icons-material";
 import { fetchAdvisors } from "~/store/advisorsSlice";
 import type { RootState, AppDispatch } from "~/store/store";
 
@@ -46,9 +46,6 @@ export default function ActionPage() {
           </Typography>
           <Button color="inherit" component={Link} to="/create-and-transfer" startIcon={<AddCircle />}>
             Transfer agent
-          </Button>
-          <Button color="inherit" component={Link} to="/advisors/new" startIcon={<PersonAdd />}>
-            New agent
           </Button>
           <Button color="inherit" component={Link} to="/pending-transfers" startIcon={<List />}>
             Pending

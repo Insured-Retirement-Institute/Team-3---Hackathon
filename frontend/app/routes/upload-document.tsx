@@ -1,6 +1,6 @@
 import type { Route } from "./+types/upload-document";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import {
   Container,
   Box,
@@ -15,8 +15,6 @@ import {
   TextField,
   IconButton,
   Tooltip,
-  AppBar,
-  Toolbar,
 } from "@mui/material";
 import {
   CloudUpload,
@@ -26,9 +24,6 @@ import {
   Save,
   Cancel,
   Check,
-  AddCircle,
-  List,
-  PersonAdd,
 } from "@mui/icons-material";
 import { api } from "~/lib/api";
 
@@ -276,29 +271,11 @@ export default function UploadDocument() {
   };
 
   return (
-    <>
-      <AppBar position="static" elevation={0} sx={{ bgcolor: "#003366" }}>
-        <Toolbar>
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 700, color: "#fff" }}>
-            Upload Document
-          </Typography>
-          <Button color="inherit" component={Link} to="/" startIcon={<List />}>
-            Dashboard
-          </Button>
-          <Button color="inherit" component={Link} to="/request" startIcon={<AddCircle />}>
-            New request
-          </Button>
-          <Button color="inherit" component={Link} to="/advisors/new" startIcon={<PersonAdd />}>
-            New agent
-          </Button>
-          <Button color="inherit" component={Link} to="/pending-transfers" startIcon={<List />}>
-            Pending
-          </Button>
-        </Toolbar>
-      </AppBar>
-
-      <main className="min-h-screen" style={{ backgroundColor: "#f5f5f5" }}>
+    <main className="min-h-screen" style={{ backgroundColor: "#f5f5f5" }}>
         <Container maxWidth="lg" sx={{ py: 4 }}>
+          <Button variant="text" onClick={() => navigate("/")} sx={{ color: "#003366", mb: 2 }}>
+            ← Back
+          </Button>
           <Box className="mb-6">
             <Typography variant="h4" fontWeight="bold" color="text.primary">
               Upload Document
@@ -725,6 +702,5 @@ export default function UploadDocument() {
         )}
       </Container>
     </main>
-    </>
   );
 }
