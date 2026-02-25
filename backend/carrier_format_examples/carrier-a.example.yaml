@@ -1,0 +1,15 @@
+# Example: carrier API request body format (carrier-a style).
+# Upload via: POST /api/admin/carrier-formats/carrier-a (file upload)
+# Bedrock Claude will transform advisor + states into JSON matching this structure.
+request:
+  carrierId: string
+  advisor:
+    advisor_id: string
+    npn: string
+    first_name: string
+    last_name: string
+    email: string
+    phone: string
+    broker_dealer: string
+    license_states: list of strings
+  statesRequested: list of state codes

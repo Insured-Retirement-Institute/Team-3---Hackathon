@@ -1,0 +1,20 @@
+# Example: carrier API request body format (carrier-b style).
+# Upload via: POST /api/admin/carrier-formats/carrier-b (file upload)
+request:
+  meta:
+    carrier_id: string
+  agent:
+    advisor_id: string
+    npn: string
+    name:
+      first: string
+      last: string
+    contacts:
+      - type: email
+        value: string
+      - type: phone
+        value: string
+    broker_dealer: string
+    license_states: list of strings
+  appointment:
+    states: list of state codes

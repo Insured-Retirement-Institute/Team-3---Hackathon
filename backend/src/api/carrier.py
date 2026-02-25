@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -23,31 +23,31 @@ class AdvisorPayload(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     broker_dealer: Optional[str] = None
-    license_states: list[str] = Field(default_factory=list)
+    license_states: List[str] = Field(default_factory=list)
 
 
 class CarrierAAppointmentRequest(BaseModel):
     carrierId: str
-    advisor: dict[str, Any]
-    statesRequested: list[str] = Field(default_factory=list)
+    advisor: Dict[str, Any]
+    statesRequested: List[str] = Field(default_factory=list)
 
 
 class CarrierAAppointmentResponse(BaseModel):
     carrierId: str
     carrierTrackingId: str
     status: str
-    acceptedStates: list[str] = Field(default_factory=list)
+    acceptedStates: List[str] = Field(default_factory=list)
 
 
 class CarrierBAppointmentRequest(BaseModel):
-    meta: dict[str, Any]
-    agent: dict[str, Any]
-    appointment: dict[str, Any]
+    meta: Dict[str, Any]
+    agent: Dict[str, Any]
+    appointment: Dict[str, Any]
 
 
 class CarrierBAppointmentResponse(BaseModel):
-    meta: dict[str, Any]
-    result: dict[str, Any]
+    meta: Dict[str, Any]
+    result: Dict[str, Any]
 
 
 class CarrierStatusUpdateRequest(BaseModel):
@@ -57,12 +57,12 @@ class CarrierStatusUpdateRequest(BaseModel):
     status: str
     agent_code: Optional[str] = None
     failure_reason: Optional[str] = None
-    submitted_states: list[str] = Field(default_factory=list)
-    accepted_states: list[str] = Field(default_factory=list)
-    rejected_states: list[str] = Field(default_factory=list)
+    submitted_states: List[str] = Field(default_factory=list)
+    accepted_states: List[str] = Field(default_factory=list)
+    rejected_states: List[str] = Field(default_factory=list)
 
 
-def _normalize_advisor_from_a(req: CarrierAAppointmentRequest) -> tuple[str, AdvisorPayload, list[str]]:
+def _normalize_advisor_from_a(req: CarrierAAppointmentRequest) -> Tuple[str, AdvisorPayload, List[str]]:
     carrier_id = req.carrierId
     a = req.advisor
     advisor_id = str(a.get("advisor_id") or a.get("id") or "")
@@ -82,7 +82,7 @@ def _normalize_advisor_from_a(req: CarrierAAppointmentRequest) -> tuple[str, Adv
     return carrier_id, payload, req.statesRequested
 
 
-def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> tuple[str, AdvisorPayload, list[str]]:
+def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> Tuple[str, AdvisorPayload, List[str]]:
     carrier_id = str(req.meta.get("carrier_id") or req.meta.get("carrierId") or "")
     if not carrier_id:
         raise HTTPException(400, "carrier_id is required")
@@ -119,10 +119,11 @@ def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> tuple[str, Adv
     return carrier_id, payload, list(states or [])
 
 
-@router.post("/dummy/carrier-a/appointments", response_model=CarrierAAppointmentResponse)
-async def dummy_carrier_a_appointment(req: CarrierAAppointmentRequest):
+@router.post("/dummy/1/appointments", response_model=CarrierAAppointmentResponse)
+async def dummy_carrier_1_appointments(req: CarrierAAppointmentRequest):
+    """Dummy endpoint for flat-format carriers (carrier ID 1 and others using flat template)."""
     carrier_id, _advisor, requested_states = _normalize_advisor_from_a(req)
-    tracking_id = f"A-{uuid.uuid4().hex[:10]}"
+    tracking_id = f"1-{uuid.uuid4().hex[:10]}"
     return CarrierAAppointmentResponse(
         carrierId=carrier_id,
         carrierTrackingId=tracking_id,
@@ -131,10 +132,11 @@ async def dummy_carrier_a_appointment(req: CarrierAAppointmentRequest):
     )
 
 
-@router.post("/dummy/carrier-b/appointments", response_model=CarrierBAppointmentResponse)
-async def dummy_carrier_b_appointment(req: CarrierBAppointmentRequest):
+@router.post("/dummy/2/appointments", response_model=CarrierBAppointmentResponse)
+async def dummy_carrier_2_appointments(req: CarrierBAppointmentRequest):
+    """Dummy endpoint for nested-format carriers (carrier ID 2)."""
     carrier_id, _advisor, requested_states = _normalize_advisor_from_b(req)
-    tracking_id = f"B-{uuid.uuid4().hex[:10]}"
+    tracking_id = f"2-{uuid.uuid4().hex[:10]}"
     return CarrierBAppointmentResponse(
         meta={"carrier_id": carrier_id, "carrier_tracking_id": tracking_id},
         result={"status": "submitted", "accepted_states": requested_states},
@@ -197,7 +199,7 @@ async def carrier_update_status(req: CarrierStatusUpdateRequest, db: Session = D
             "rejected_states": updated.get("rejected_states"),
         }
 
-    submission: CarrierSubmission | None = None
+    submission: Optional[CarrierSubmission] = None
 
     if req.submission_id:
         try:

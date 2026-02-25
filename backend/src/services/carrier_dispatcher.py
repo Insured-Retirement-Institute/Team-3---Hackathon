@@ -15,7 +15,8 @@ from src.utils import json_store
 logger = logging.getLogger(__name__)
 
 
-def build_carrier_a_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
+def build_flat_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
+    """Flat shape: carrierId, advisor, statesRequested (used by dummy/1 endpoint)."""
     return {
         "carrierId": carrier_id,
         "advisor": {
@@ -32,7 +33,8 @@ def build_carrier_a_payload(advisor: dict[str, Any], carrier_id: str, states: li
     }
 
 
-def build_carrier_b_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
+def build_nested_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
+    """Nested shape: meta, agent, appointment (used by dummy/2 endpoint)."""
     return {
         "meta": {"carrier_id": carrier_id},
         "agent": {
@@ -51,6 +53,7 @@ def build_carrier_b_payload(advisor: dict[str, Any], carrier_id: str, states: li
 
 
 async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_url: str) -> None:
+    logger.info("Dispatch started for %s submission(s), base_url=%s", len(submission_ids), carrier_base_url)
     use_json_store = os.getenv("USE_JSON_STORE", "true").lower() in {"1", "true", "yes"}
     if use_json_store:
         async with httpx.AsyncClient(base_url=carrier_base_url, timeout=30.0) as client:
@@ -71,10 +74,10 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     json_store.update_submission(submission_id, {"status": "error", "error_message": "Missing payload in request_data"})
                     continue
 
-                if carrier_format == "carrier_a":
-                    path = "/api/carrier/dummy/carrier-a/appointments"
-                elif carrier_format == "carrier_b":
-                    path = "/api/carrier/dummy/carrier-b/appointments"
+                if carrier_format == "flat":
+                    path = "/api/carrier/dummy/1/appointments"
+                elif carrier_format == "nested":
+                    path = "/api/carrier/dummy/2/appointments"
                 else:
                     json_store.update_submission(submission_id, {"status": "error", "error_message": f"Unknown carrier_format: {carrier_format}"})
                     continue
@@ -149,10 +152,10 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     db.commit()
                     continue
 
-                if carrier_format == "carrier_a":
-                    path = "/api/carrier/dummy/carrier-a/appointments"
-                elif carrier_format == "carrier_b":
-                    path = "/api/carrier/dummy/carrier-b/appointments"
+                if carrier_format == "flat":
+                    path = "/api/carrier/dummy/1/appointments"
+                elif carrier_format == "nested":
+                    path = "/api/carrier/dummy/2/appointments"
                 else:
                     submission.status = "error"
                     submission.error_message = f"Unknown carrier_format: {carrier_format}"

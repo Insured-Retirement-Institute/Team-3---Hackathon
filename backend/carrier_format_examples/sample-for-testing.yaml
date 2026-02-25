@@ -1,0 +1,21 @@
+# Sample YAML to test the carrier format API
+# Use this file to test: upload (Carrier format YAML page) and test-transform.
+#
+# How to test:
+# 1. Upload: Carrier format YAML page → choose a carrier (e.g. Principal / 3) → choose this file → Upload.
+# 2. Test transform: Same page → Test transform → pick that carrier + an agent → Run test.
+#    You should see "format_used": "custom_yaml" and a payload matching this shape.
+#
+# This shape matches the standard "flat" format. Carriers with no uploaded YAML
+# use the default built-in: 1 → flat, 2 → nested; 3–8 → flat.
+request:
+  carrierId: string
+  advisor:
+    advisor_id: string
+    npn: string
+    first_name: string
+    email: string
+    phone: string
+    broker_dealer: string
+    license_states: list of strings
+  statesRequested: list of state codes

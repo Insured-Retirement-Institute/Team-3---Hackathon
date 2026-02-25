@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import os
 import uuid
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -7,10 +11,17 @@ from src.utils.database import get_db
 from src.models.advisor import Advisor
 from src.models.advisor import CarrierSubmission
 from src.services.ai_service import AIService
-from src.services.carrier_dispatcher import dispatch_carrier_submissions, build_carrier_a_payload, build_carrier_b_payload
+from src.services.carrier_dispatcher import dispatch_carrier_submissions, build_flat_payload, build_nested_payload
+from src.services.carrier_transform_service import transform_to_carrier_format
 from src.utils import json_store
+from src.utils import carrier_formats as carrier_formats_store
+from src.utils.carrier_registry import (
+    get_carrier_name,
+    get_default_template,
+    list_carriers as registry_list_carriers,
+    STANDARD_TEMPLATE,
+)
 import boto3
-import os
 
 router = APIRouter()
 s3_client = boto3.client('s3')
@@ -20,47 +31,47 @@ ai_service = AIService()
 class CarrierSubmissionCreateRequest(BaseModel):
     carrier_id: str
     integration_method: str = "api"
-    submitted_states: list[str] = Field(default_factory=list)
-    carrier_format: str = "carrier_a"
+    submitted_states: List[str] = Field(default_factory=list)
+    carrier_format: str = "flat"
 
 
 class AdvisorCreateRequest(BaseModel):
     npn: str
-    first_name: str | None = None
-    last_name: str | None = None
-    email: str | None = None
-    phone: str | None = None
-    broker_dealer: str | None = None
-    license_states: list[str] = Field(default_factory=list)
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    broker_dealer: Optional[str] = None
+    license_states: List[str] = Field(default_factory=list)
     status: str = "pending"
-    document_url: str | None = None
-    transfer_date: str | None = None
+    document_url: Optional[str] = None
+    transfer_date: Optional[str] = None
 
 
 class CarrierDispatchTarget(BaseModel):
     carrier_id: str
-    carrier_format: str = "carrier_a"
+    carrier_format: str = "flat"
     integration_method: str = "api"
-    submitted_states: list[str] = Field(default_factory=list)
+    submitted_states: List[str] = Field(default_factory=list)
 
 
 class DispatchAllCarriersRequest(BaseModel):
-    carriers: list[CarrierDispatchTarget] = Field(default_factory=list)
-    carrier_base_url: str | None = None
+    carriers: List[CarrierDispatchTarget] = Field(default_factory=list)
+    carrier_base_url: Optional[str] = None
 
 
 class CarrierPayloadUploadRequest(BaseModel):
     advisor_id: str
     carrier_id: str
-    carrier_format: str = "carrier_a"
+    carrier_format: str = "flat"
     integration_method: str = "api"
-    submitted_states: list[str] = Field(default_factory=list)
+    submitted_states: List[str] = Field(default_factory=list)
     payload: dict
     dispatch_now: bool = True
-    carrier_base_url: str | None = None
+    carrier_base_url: Optional[str] = None
 
 
-def _carrier_payload_carrier_a(advisor: Advisor, carrier_id: str, states: list[str]) -> dict:
+def _carrier_payload_flat(advisor: Advisor, carrier_id: str, states: List[str]) -> dict:
     return {
         "carrierId": carrier_id,
         "advisor": {
@@ -77,7 +88,7 @@ def _carrier_payload_carrier_a(advisor: Advisor, carrier_id: str, states: list[s
     }
 
 
-def _carrier_payload_carrier_b(advisor: Advisor, carrier_id: str, states: list[str]) -> dict:
+def _carrier_payload_nested(advisor: Advisor, carrier_id: str, states: List[str]) -> dict:
     return {
         "meta": {"carrier_id": carrier_id},
         "agent": {
@@ -94,23 +105,72 @@ def _carrier_payload_carrier_b(advisor: Advisor, carrier_id: str, states: list[s
         "appointment": {"states": states},
     }
 
+
+def _advisor_to_dict(advisor: Any) -> dict:
+    """Normalize Advisor ORM or dict to a plain dict for payload building."""
+    if hasattr(advisor, "__dict__") and not isinstance(advisor, dict):
+        return {
+            "id": str(advisor.id),
+            "advisor_id": str(advisor.id),
+            "npn": getattr(advisor, "npn", None),
+            "first_name": getattr(advisor, "first_name", None),
+            "last_name": getattr(advisor, "last_name", None),
+            "email": getattr(advisor, "email", None),
+            "phone": getattr(advisor, "phone", None),
+            "broker_dealer": getattr(advisor, "broker_dealer", None),
+            "license_states": getattr(advisor, "license_states", None) or [],
+        }
+    d = dict(advisor) if hasattr(advisor, "keys") else advisor
+    d.setdefault("advisor_id", d.get("id"))
+    return d
+
+
+async def _build_payload_for_carrier(
+    advisor: Any,
+    carrier_id: str,
+    carrier_format: str,
+    submitted_states: List[str],
+) -> dict:
+    """Build carrier request payload: use YAML + Bedrock transform if format exists, else built-in builders."""
+    advisor_dict = _advisor_to_dict(advisor)
+    format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
+    if format_yaml:
+        transformed = await transform_to_carrier_format(
+            carrier_id, format_yaml, advisor_dict, submitted_states
+        )
+        if transformed is not None:
+            return transformed
+    if carrier_format == "flat":
+        return build_flat_payload(advisor_dict, carrier_id, submitted_states)
+    return build_nested_payload(advisor_dict, carrier_id, submitted_states)
+
 @router.post("/advisors/upload")
 async def upload_advisor(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
     """Upload advisor data (PDF/Excel) and extract information using AI"""
-    
-    # 1. Upload file to S3
     bucket = os.getenv("S3_BUCKET")
     file_key = f"uploads/{file.filename}"
-    
-    s3_client.upload_fileobj(
-        file.file,
-        bucket,
-        file_key
-    )
-    
+
+    if bucket:
+        # 1a. Upload file to S3
+        s3_client.upload_fileobj(
+            file.file,
+            bucket,
+            file_key
+        )
+    else:
+        # 1b. Local dev: save to local_data/uploads/
+        from pathlib import Path
+        local_dir = Path(__file__).resolve().parents[2] / "local_data" / "uploads"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_path = local_dir / (file.filename or "upload")
+        content = await file.read()
+        local_path.write_bytes(content)
+        file_key = str(local_path)
+        bucket = "local"
+
     # 2. Extract data using AI
     advisor_data = await ai_service.extract_from_file(bucket, file_key)
     
@@ -167,7 +227,7 @@ async def create_advisor(body: AdvisorCreateRequest, db: Session = Depends(get_d
 
 @router.get("/advisors")
 async def list_advisors(
-    status: str = None,
+    status: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """List all advisors"""
@@ -207,6 +267,27 @@ async def list_advisors(
             for a in advisors
         ],
     }
+
+
+@router.post("/seed")
+async def seed_advisors(db: Session = Depends(get_db)):
+    """Create sample advisors in local JSON store (USE_JSON_STORE=true only). For UI integration."""
+    if db is not None:
+        raise HTTPException(400, "Seed is only supported when USE_JSON_STORE=true")
+    seed_data = [
+        {"npn": "12345678", "first_name": "Jane", "last_name": "Smith", "email": "jane.smith@example.com", "phone": "555-0101", "broker_dealer": "Example BD", "license_states": ["CA", "TX", "NY"], "status": "pending"},
+        {"npn": "87654321", "first_name": "John", "last_name": "Doe", "email": "john.doe@example.com", "phone": "555-0102", "broker_dealer": "Example BD", "license_states": ["CA", "FL"], "status": "pending"},
+        {"npn": "11223344", "first_name": "Maria", "last_name": "Garcia", "email": "maria.garcia@example.com", "phone": "555-0103", "broker_dealer": "Another BD", "license_states": ["TX", "AZ", "NM"], "status": "completed"},
+    ]
+    created = []
+    for data in seed_data:
+        try:
+            advisor_id = json_store.create_advisor(data)
+            created.append({"id": advisor_id, "npn": data["npn"], "name": f"{data['first_name']} {data['last_name']}"})
+        except ValueError as e:
+            if "NPN already exists" not in str(e):
+                raise
+    return {"success": True, "created": len(created), "advisors": created}
 
 
 @router.get("/advisors/{advisor_id}")
@@ -287,22 +368,20 @@ async def dispatch_advisor_to_all_carriers(
     carriers = body.carriers
     if not carriers:
         carriers = [
-            CarrierDispatchTarget(carrier_id="carrier-a", carrier_format="carrier_a"),
-            CarrierDispatchTarget(carrier_id="carrier-b", carrier_format="carrier_b"),
+            CarrierDispatchTarget(carrier_id="1", carrier_format="flat"),
+            CarrierDispatchTarget(carrier_id="2", carrier_format="nested"),
         ]
 
-    submission_ids: list[str] = []
+    submission_ids: List[str] = []
     for c in carriers:
         carrier_format = (c.carrier_format or "").lower()
-        if carrier_format not in {"carrier_a", "carrier_b"}:
-            raise HTTPException(400, "carrier_format must be carrier_a or carrier_b")
+        if carrier_format not in {"flat", "nested"}:
+            raise HTTPException(400, "carrier_format must be flat or nested")
 
         if db is None:
-            if carrier_format == "carrier_a":
-                payload = build_carrier_a_payload(advisor, c.carrier_id, c.submitted_states)
-            else:
-                payload = build_carrier_b_payload(advisor, c.carrier_id, c.submitted_states)
-
+            payload = await _build_payload_for_carrier(
+                advisor, c.carrier_id, carrier_format, c.submitted_states
+            )
             submission_id = json_store.create_submission(
                 {
                     "advisor_id": str(advisor.get("id")),
@@ -318,10 +397,10 @@ async def dispatch_advisor_to_all_carriers(
             )
             submission_ids.append(submission_id)
         else:
-            if carrier_format == "carrier_a":
-                payload = _carrier_payload_carrier_a(advisor, c.carrier_id, c.submitted_states)
+            if carrier_format == "flat":
+                payload = _carrier_payload_flat(advisor, c.carrier_id, c.submitted_states)
             else:
-                payload = _carrier_payload_carrier_b(advisor, c.carrier_id, c.submitted_states)
+                payload = _carrier_payload_nested(advisor, c.carrier_id, c.submitted_states)
 
             submission = CarrierSubmission(
                 advisor_id=advisor.id,
@@ -365,8 +444,8 @@ async def upload_carrier_payload(
         raise HTTPException(404, "Advisor not found")
 
     carrier_format = (body.carrier_format or "").lower()
-    if carrier_format not in {"carrier_a", "carrier_b"}:
-        raise HTTPException(400, "carrier_format must be carrier_a or carrier_b")
+    if carrier_format not in {"flat", "nested"}:
+        raise HTTPException(400, "carrier_format must be flat or nested")
 
     payload_file = json_store.save_carrier_payload(body.payload)
 
@@ -419,15 +498,13 @@ async def submit_advisor_to_carrier(
             raise HTTPException(404, "Advisor not found")
 
     carrier_format = (body.carrier_format or "").lower()
-    if carrier_format not in {"carrier_a", "carrier_b"}:
-        raise HTTPException(400, "carrier_format must be carrier_a or carrier_b")
+    if carrier_format not in {"flat", "nested"}:
+        raise HTTPException(400, "carrier_format must be flat or nested")
 
     if db is None:
-        if carrier_format == "carrier_a":
-            payload = build_carrier_a_payload(advisor, body.carrier_id, body.submitted_states)
-        else:
-            payload = build_carrier_b_payload(advisor, body.carrier_id, body.submitted_states)
-
+        payload = await _build_payload_for_carrier(
+            advisor, body.carrier_id, carrier_format, body.submitted_states
+        )
         submission_id = json_store.create_submission(
             {
                 "advisor_id": str(advisor.get("id")),
@@ -451,10 +528,10 @@ async def submit_advisor_to_carrier(
             "payload": payload,
         }
 
-    if carrier_format == "carrier_a":
-        payload = _carrier_payload_carrier_a(advisor, body.carrier_id, body.submitted_states)
+    if carrier_format == "flat":
+        payload = _carrier_payload_flat(advisor, body.carrier_id, body.submitted_states)
     else:
-        payload = _carrier_payload_carrier_b(advisor, body.carrier_id, body.submitted_states)
+        payload = _carrier_payload_nested(advisor, body.carrier_id, body.submitted_states)
 
     submission = CarrierSubmission(
         advisor_id=advisor.id,
@@ -482,8 +559,21 @@ async def submit_advisor_to_carrier(
     }
 
 
+@router.get("/carrier-submissions")
+@router.get("/carrier-submissions/")
+async def list_all_carrier_submissions(db: Session = Depends(get_db)):
+    """List all carrier submissions (JSON store only). For pending-transfers UI."""
+    if db is not None:
+        raise HTTPException(400, "List all submissions is only supported when USE_JSON_STORE=true")
+    submissions = json_store.list_submissions()
+    return {"success": True, "data": submissions}
+
+
 @router.get("/carrier-submissions/{submission_id}")
 async def get_carrier_submission(submission_id: str, db: Session = Depends(get_db)):
+    if not (submission_id and submission_id.strip()):
+        raise HTTPException(400, "submission_id is required")
+    submission_id = submission_id.strip()
     if db is None:
         submission = json_store.get_submission(submission_id)
         if not submission:
@@ -524,7 +614,7 @@ async def get_carrier_submission(submission_id: str, db: Session = Depends(get_d
 @router.get("/advisors/{advisor_id}/carrier-submissions")
 async def list_advisor_carrier_submissions(
     advisor_id: str,
-    carrier_id: str | None = None,
+    carrier_id: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     if db is None:
@@ -557,3 +647,162 @@ async def list_advisor_carrier_submissions(
             for s in submissions
         ],
     }
+
+
+# ---------- Carriers (id -> name registry for UI) ----------
+
+@router.get("/carriers")
+async def list_carriers_endpoint():
+    """List carriers with id, display name, and default template (flat/nested) for UI."""
+    carriers_raw = registry_list_carriers()
+    format_ids = set(carrier_formats_store.list_carrier_format_ids())
+    data = [
+        {
+            "id": c["id"],
+            "name": c["name"],
+            "default_template": get_default_template(c["id"]),
+            "has_custom_yaml": c["id"] in format_ids,
+        }
+        for c in carriers_raw
+    ]
+    return {"success": True, "data": data}
+
+
+# ---------- Carrier format YAML (request/response schema); used by Bedrock to transform payloads ----------
+
+@router.get("/carrier-formats/sample")
+async def get_sample_carrier_format_yaml():
+    """Return the standard carrier template (flat) YAML as reference."""
+    sample = """# Standard carrier template (flat)
+# This is the default request shape. Carriers can upload different YAMLs; Bedrock will map agent data to the uploaded shape.
+
+request:
+  carrierId: string
+  advisor:
+    advisor_id: string
+    npn: string
+    first_name: string
+    last_name: string
+    email: string
+    phone: string
+    broker_dealer: string
+    license_states: list of strings
+  statesRequested: list of state codes
+"""
+    return {
+        "success": True,
+        "yaml": sample,
+        "template_name": "standard (flat)",
+        "description": "Reference shape. Upload carrier-specific YAMLs for different formats; use carrier ID when uploading.",
+    }
+
+
+class TestTransformRequest(BaseModel):
+    carrier_id: str
+    advisor_id: str
+    states: List[str] = Field(default_factory=list)
+
+
+@router.post("/carrier-formats/test-transform")
+async def test_transform_payload(body: TestTransformRequest, db: Session = Depends(get_db)):
+    """
+    Run the payload build synchronously (no submit). Returns the JSON that would be sent to the carrier.
+    Use this to compare standard vs custom YAML outputs without waiting for async dispatch.
+    """
+    if db is None:
+        advisor = json_store.get_advisor(body.advisor_id)
+    else:
+        try:
+            advisor_uuid = uuid.UUID(body.advisor_id)
+        except ValueError:
+            raise HTTPException(400, "advisor_id must be a UUID")
+        adv = db.query(Advisor).filter(Advisor.id == advisor_uuid).first()
+        if not adv:
+            raise HTTPException(404, "Advisor not found")
+        advisor = {
+            "id": str(adv.id),
+            "npn": adv.npn,
+            "first_name": adv.first_name,
+            "last_name": adv.last_name,
+            "email": adv.email,
+            "phone": adv.phone,
+            "broker_dealer": adv.broker_dealer,
+            "license_states": adv.license_states or [],
+        }
+    if not advisor:
+        raise HTTPException(404, "Advisor not found")
+    advisor_dict = _advisor_to_dict(advisor)
+    states = body.states or []
+    carrier_id = body.carrier_id.strip() or "1"
+    format_yaml = carrier_formats_store.load_carrier_format(carrier_id)
+    format_used = "flat"
+    custom_yaml_uploaded = bool(format_yaml)
+    if format_yaml:
+        transformed = await transform_to_carrier_format(
+            carrier_id, format_yaml, advisor_dict, states
+        )
+        if transformed is not None:
+            return {
+                "success": True,
+                "payload": transformed,
+                "format_used": "custom_yaml",
+                "carrier_id": carrier_id,
+                "custom_yaml_uploaded": True,
+                "bedrock_used": True,
+            }
+    default_tpl = get_default_template(carrier_id)
+    if default_tpl == "nested":
+        format_used = "nested"
+        payload = build_nested_payload(advisor_dict, carrier_id, states)
+    else:
+        payload = build_flat_payload(advisor_dict, carrier_id, states)
+    return {
+        "success": True,
+        "payload": payload,
+        "format_used": format_used,
+        "carrier_id": carrier_id,
+        "custom_yaml_uploaded": custom_yaml_uploaded,
+        "bedrock_used": False,
+        "message": "Custom YAML is configured for this carrier but Bedrock did not run (check AWS credentials and region). Showing default payload."
+        if custom_yaml_uploaded
+        else None,
+    }
+
+
+@router.post("/carrier-formats/{carrier_id}")
+async def upload_carrier_format_yaml(carrier_id: str, file: UploadFile = File(...)):
+    """
+    Upload a YAML file that describes the carrier API request (and optionally response) format.
+    Stored locally under local_data/carrier_formats/{carrier_id}.yaml. When present, Bedrock
+    Claude is used to transform advisor data into this format before calling the carrier.
+    """
+    if not carrier_id or not carrier_id.strip():
+        raise HTTPException(400, "carrier_id is required")
+    content = (await file.read()).decode("utf-8", errors="replace")
+    path = carrier_formats_store.save_carrier_format(carrier_id.strip(), content)
+    return {"success": True, "carrier_id": carrier_id.strip(), "saved_as": path}
+
+
+@router.get("/carrier-formats/{carrier_id}")
+async def get_carrier_format_yaml(carrier_id: str):
+    """Get the stored YAML format for a carrier, if any."""
+    content = carrier_formats_store.load_carrier_format(carrier_id)
+    if content is None:
+        raise HTTPException(404, f"No format YAML found for carrier {carrier_id}")
+    return {"success": True, "carrier_id": carrier_id, "yaml": content}
+
+
+@router.get("/carrier-formats")
+async def list_carrier_formats():
+    """List carriers that have a format YAML stored. Includes template used (custom_yaml vs default)."""
+    ids = carrier_formats_store.list_carrier_format_ids()
+    items = [
+        {
+            "carrier_id": cid,
+            "name": get_carrier_name(cid),
+            "template_used": "custom_yaml",
+            "default_template": get_default_template(cid),
+        }
+        for cid in ids
+    ]
+    return {"success": True, "carrier_ids": ids, "carriers": items}

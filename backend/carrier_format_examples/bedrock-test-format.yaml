@@ -1,0 +1,29 @@
+# BEDROCK TEST – deliberately different shape so you can see Bedrock working
+#
+# This format uses different top-level keys and field names than the built-in
+# "flat" (advisor, statesRequested) or "nested" (agent, appointment) templates.
+# If Bedrock is working, test-transform will return format_used: "custom_yaml"
+# and a payload with "application", "applicant", and "jurisdictions".
+# If you see "flat" or "nested" and the old shape, Bedrock is not being used.
+#
+# How to test:
+# 1. Upload this file for one carrier (e.g. Principal / 3):
+#    Carrier format YAML page → Carrier: Principal → Choose this file → Upload.
+# 2. Test transform: Carrier: Principal, Agent: any → Run test.
+# 3. Check: format_used should be "custom_yaml" and payload should look like:
+#      { "application": { "carrier_code": "...", "applicant": { ... }, "jurisdictions": [...] } }
+#    If you see "advisor" and "statesRequested" instead, Bedrock is not running
+#    (no AWS credentials or Bedrock unavailable).
+#
+application:
+  carrier_code: string
+  applicant:
+    id: string
+    national_producer_number: string
+    first_name: string
+    last_name: string
+    email_address: string
+    phone_number: string
+    broker_dealer: string
+    licensed_states: list of strings
+  jurisdictions: list of state codes
