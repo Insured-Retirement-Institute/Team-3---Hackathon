@@ -41,7 +41,7 @@ You can also create advisors one by one with `POST /api/admin/advisors` (see Swa
 You can define each carrier’s **request (and optionally response) format** in a YAML file. That YAML is stored locally and used so that **AWS Bedrock (Claude 3.5 Sonnet)** transforms advisor data into the carrier’s expected shape before the carrier API is called.
 
 1. **Upload a format YAML** for a carrier:
-   - `POST /api/admin/carrier-formats/{carrier_id}` with a YAML file in the request body (e.g. `carrier_id=carrier-a`).
+   - `POST /api/admin/carrier-formats/{carrier_id}` with a YAML file in the request body (e.g. `carrier_id=1`; use numeric IDs 1–8).
    - YAML describes the expected request body structure (and optionally response). Examples: `carrier_format_examples/carrier-a.example.yaml`, `carrier_format_examples/carrier-b.example.yaml`.
 
 2. **Stored location:** `local_data/carrier_formats/{carrier_id}.yaml`.
