@@ -10,10 +10,10 @@ Start the backend first (see repo `backend/README.md`):
 cd backend && USE_JSON_STORE=true .venv/bin/uvicorn src.main:app --port 8000
 ```
 
-Then run the frontend. It calls `http://localhost:8000` by default. To override:
+Then run the frontend. It calls `http://localhost:8001` by default. To override:
 
 ```bash
-export VITE_API_BASE_URL=http://localhost:8000
+export VITE_API_BASE_URL=http://localhost:8001
 npm run dev
 ```
 

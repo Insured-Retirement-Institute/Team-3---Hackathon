@@ -1,8 +1,8 @@
 /**
- * Backend API client. Set VITE_API_BASE_URL (default http://localhost:8000) when running frontend.
+ * Backend API client. Set VITE_API_BASE_URL (default http://localhost:8001) when running frontend.
  */
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || "http://localhost:8001";
 
 async function request<T>(
   path: string,
