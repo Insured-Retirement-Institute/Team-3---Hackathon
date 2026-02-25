@@ -6,10 +6,10 @@ STANDARD_TEMPLATE = "flat"
 
 # Carrier ID (numeric 1-8) -> display name shown in UI
 CARRIER_NAMES: dict[str, str] = {
-    "1": "MassMutual",
+    "1": "ABC Life Insurance Company",
     "2": "Nationwide",
     "3": "Principal",
-    "4": "Lincoln Financial",
+    "4": "XYZ Annuity Corp",
     "5": "Pacific Life",
     "6": "Guardian Life",
     "7": "Ameritas",
