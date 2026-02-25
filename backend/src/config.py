@@ -28,3 +28,13 @@ LOG_LEVEL: str = os.getenv('LOG_LEVEL', 'INFO')
 
 # File Upload Configuration
 MAX_FILE_SIZE: int = int(os.getenv('MAX_FILE_SIZE', '52428800'))  # 50MB default
+
+# AWS Configuration
+AWS_REGION: str = os.getenv('AWS_REGION', 'us-east-1')
+AWS_ACCESS_KEY_ID: Optional[str] = os.getenv('AWS_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv('AWS_SECRET_ACCESS_KEY')
+AWS_SESSION_TOKEN: Optional[str] = os.getenv('AWS_SESSION_TOKEN')
+
+# SNS Configuration
+SNS_TOPIC_ARN: Optional[str] = os.getenv('SNS_TOPIC_ARN')
+SNS_ENABLED: bool = os.getenv('SNS_ENABLED', 'false').lower() == 'true'

@@ -13,7 +13,7 @@ for name in ("src.api.admin", "src.services.carrier_dispatcher", "src.services.c
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.api import admin, carrier, document
+from src.api import admin, carrier, document, notifications
 from src.utils.database import engine, Base
 import os
 
@@ -40,6 +40,7 @@ app.add_middleware(
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 app.include_router(carrier.router, prefix="/api/carrier", tags=["Carrier"])
 app.include_router(document.router, prefix="/api", tags=["Document Extraction"])
+app.include_router(notifications.router, prefix="/api/notifications", tags=["Notifications"])
 
 @app.get("/")
 async def root():
