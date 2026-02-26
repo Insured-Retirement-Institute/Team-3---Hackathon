@@ -31,10 +31,10 @@ When you trigger **dispatch-all** (or submit to a carrier), you’ll see lines l
 **Hitting each carrier API:**
 ```
 [CARRIER] Dispatch started: 3 submission(s), base_url=http://localhost:8000
-[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/dummy/1/appointments (carrier_id=1, format=flat)
-[CARRIER] Carrier API responded: /api/carrier/dummy/1/appointments carrier_id=1 status=200 keys=[...]
-[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/dummy/2/appointments (carrier_id=2, format=nested)
-[CARRIER] Carrier API responded: /api/carrier/dummy/2/appointments carrier_id=2 status=200 keys=[...]
+[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/flat/appointments (carrier_id=1, format=flat)
+[CARRIER] Carrier API responded: /api/carrier/flat/appointments carrier_id=1 status=200 keys=[...]
+[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/nested/appointments (carrier_id=2, format=nested)
+[CARRIER] Carrier API responded: /api/carrier/nested/appointments carrier_id=2 status=200 keys=[...]
 [CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/appointments (carrier_id=3, format=custom_yaml)
 [CARRIER] Carrier API responded: /api/carrier/appointments carrier_id=3 status=200 keys=[...]
 ```

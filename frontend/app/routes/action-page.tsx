@@ -14,8 +14,10 @@ import {
   Chip,
   AppBar,
   Toolbar,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
-import { AddCircle, List, CloudUpload, Refresh } from "@mui/icons-material";
+import { AddCircle, List, CloudUpload, Refresh, AccountCircle } from "@mui/icons-material";
 import { fetchAdvisors } from "~/store/advisorsSlice";
 import type { RootState, AppDispatch } from "~/store/store";
 
@@ -53,6 +55,12 @@ export default function ActionPage() {
           <Button color="inherit" component={Link} to="/carrier-formats" startIcon={<CloudUpload />}>
             Carrier formats
           </Button>
+          <Box sx={{ flexGrow: 1 }} />
+          <Tooltip title="Login">
+            <IconButton color="inherit" aria-label="Login" size="large" sx={{ ml: 1 }}>
+              <AccountCircle sx={{ fontSize: 32 }} />
+            </IconButton>
+          </Tooltip>
         </Toolbar>
       </AppBar>
 

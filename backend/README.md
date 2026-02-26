@@ -23,6 +23,15 @@
 
 3. Open **http://localhost:8000/docs** for Swagger UI.
 
+## API authentication (Bearer token)
+
+All `/api/*` requests **must** include the header: `Authorization: Bearer <token>`. Override with env:
+
+- **Backend:** `AUTH_TOKEN` (default: see `src/main.py`).
+- **Frontend:** `VITE_AUTH_TOKEN` must match the backend token so API calls succeed.
+
+In Swagger UI, click **Authorize**, choose Bearer Auth, and paste the token. For `curl`, add: `-H "Authorization: Bearer <token>"`.
+
 ## Insert sample data (local JSON store)
 
 With the server running and `USE_JSON_STORE=true`:

@@ -119,9 +119,9 @@ def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> Tuple[str, Adv
     return carrier_id, payload, list(states or [])
 
 
-@router.post("/dummy/1/appointments", response_model=CarrierAAppointmentResponse)
-async def dummy_carrier_1_appointments(req: CarrierAAppointmentRequest):
-    """Dummy endpoint for flat-format carriers (carrier ID 1 and others using flat template)."""
+@router.post("/flat/appointments", response_model=CarrierAAppointmentResponse)
+async def flat_carrier_appointments(req: CarrierAAppointmentRequest):
+    """Flat-format carrier endpoint (carrier ID 1 and others using flat template)."""
     carrier_id, _advisor, requested_states = _normalize_advisor_from_a(req)
     tracking_id = f"1-{uuid.uuid4().hex[:10]}"
     return CarrierAAppointmentResponse(
@@ -132,9 +132,9 @@ async def dummy_carrier_1_appointments(req: CarrierAAppointmentRequest):
     )
 
 
-@router.post("/dummy/2/appointments", response_model=CarrierBAppointmentResponse)
-async def dummy_carrier_2_appointments(req: CarrierBAppointmentRequest):
-    """Dummy endpoint for nested-format carriers (carrier ID 2)."""
+@router.post("/nested/appointments", response_model=CarrierBAppointmentResponse)
+async def nested_carrier_appointments(req: CarrierBAppointmentRequest):
+    """Nested-format carrier endpoint (carrier ID 2)."""
     carrier_id, _advisor, requested_states = _normalize_advisor_from_b(req)
     tracking_id = f"2-{uuid.uuid4().hex[:10]}"
     return CarrierBAppointmentResponse(

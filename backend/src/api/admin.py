@@ -190,7 +190,7 @@ def _log_carrier_request_body(carrier_id: str, format_used: str, payload: dict, 
 
 
 def _ensure_meta_carrier_id(payload: dict, carrier_id: str) -> None:
-    """Ensure payload.meta.carrier_id is set so dummy/2 (nested) endpoint does not return 400."""
+    """Ensure payload.meta.carrier_id is set so nested-format carrier endpoint does not return 400."""
     meta = payload.get("meta")
     if meta is not None and isinstance(meta, dict):
         if not meta.get("carrier_id") and not meta.get("carrierId"):

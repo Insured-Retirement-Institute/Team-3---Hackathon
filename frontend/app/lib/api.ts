@@ -1,7 +1,20 @@
 /**
  * Backend API client. Set VITE_API_BASE_URL (default http://localhost:8000) when running frontend.
+ * Mandatory auth: set VITE_AUTH_TOKEN (default matches backend AUTH_TOKEN).
  */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string) || "http://localhost:8000";
+
+/** Bearer token required by backend for all /api/* requests. Must match backend AUTH_TOKEN. */
+const AUTH_TOKEN =
+  (import.meta.env.VITE_AUTH_TOKEN as string) ||
+  "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJJUi1EZW1vIiwiZXhwIjoxOTk5OTk5OTk5fQ.dummy";
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    Authorization: `Bearer ${AUTH_TOKEN}`,
+    ...extra,
+  };
+}
 
 async function request<T>(
   path: string,
@@ -12,7 +25,7 @@ async function request<T>(
   if (params) {
     Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
   }
-  const headers: Record<string, string> = { ...(init.headers as Record<string, string>) };
+  const headers: Record<string, string> = authHeaders(init.headers as Record<string, string>);
   if (init.body && typeof init.body === "string") headers["Content-Type"] = "application/json";
 
   const res = await fetch(url.toString(), { ...init, headers });
@@ -36,7 +49,7 @@ export const api = {
 
   postForm: async <T>(path: string, formData: FormData): Promise<T> => {
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
-    const res = await fetch(url, { method: "POST", body: formData });
+    const res = await fetch(url, { method: "POST", headers: authHeaders(), body: formData });
     if (!res.ok) throw new Error(await res.text() || `HTTP ${res.status}`);
     const ct = res.headers.get("content-type");
     return (ct?.includes("application/json") ? res.json() : res.text()) as Promise<T>;

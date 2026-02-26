@@ -14,9 +14,13 @@ from src.utils import json_store
 
 logger = logging.getLogger(__name__)
 
+# Same Bearer token as main.py; required when this service calls /api/carrier/* on the same host
+AUTH_TOKEN = os.getenv("AUTH_TOKEN", "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJJUi1EZW1vIiwiZXhwIjoxOTk5OTk5OTk5fQ.dummy")
+AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+
 
 def build_flat_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
-    """Flat shape: carrierId, advisor, statesRequested (used by dummy/1 endpoint)."""
+    """Flat shape: carrierId, advisor, statesRequested (used by flat-format carrier endpoint)."""
     return {
         "carrierId": carrier_id,
         "advisor": {
@@ -34,7 +38,7 @@ def build_flat_payload(advisor: dict[str, Any], carrier_id: str, states: list[st
 
 
 def build_nested_payload(advisor: dict[str, Any], carrier_id: str, states: list[str]) -> dict[str, Any]:
-    """Nested shape: meta, agent, appointment (used by dummy/2 endpoint)."""
+    """Nested shape: meta, agent, appointment (used by nested-format carrier endpoint)."""
     return {
         "meta": {"carrier_id": carrier_id},
         "agent": {
@@ -75,9 +79,9 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     continue
 
                 if carrier_format == "flat":
-                    path = "/api/carrier/dummy/1/appointments"
+                    path = "/api/carrier/flat/appointments"
                 elif carrier_format == "nested":
-                    path = "/api/carrier/dummy/2/appointments"
+                    path = "/api/carrier/nested/appointments"
                 elif carrier_format == "custom_yaml":
                     path = "/api/carrier/appointments"
                 else:
@@ -94,7 +98,7 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                 )
 
                 try:
-                    resp = await client.post(path, json=payload)
+                    resp = await client.post(path, json=payload, headers=AUTH_HEADERS)
                     resp.raise_for_status()
                     resp_json = resp.json()
                     logger.info(
@@ -162,9 +166,9 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     continue
 
                 if carrier_format == "flat":
-                    path = "/api/carrier/dummy/1/appointments"
+                    path = "/api/carrier/flat/appointments"
                 elif carrier_format == "nested":
-                    path = "/api/carrier/dummy/2/appointments"
+                    path = "/api/carrier/nested/appointments"
                 elif carrier_format == "custom_yaml":
                     path = "/api/carrier/appointments"
                 else:
@@ -183,7 +187,7 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                 )
 
                 try:
-                    resp = await client.post(path, json=payload)
+                    resp = await client.post(path, json=payload, headers=AUTH_HEADERS)
                     resp.raise_for_status()
                     resp_json = resp.json()
                     logger.info(
