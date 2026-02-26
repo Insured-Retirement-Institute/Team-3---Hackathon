@@ -1,220 +1,156 @@
-# Advisor Onboarding API
+# Advisor Onboarding API (Orchestration Service)
 
-## Restart backend and frontend
+API for broker/dealer advisor onboarding and carrier integration. It acts as the **orchestration layer** between a React frontend, carrier assignment APIs, document processing (OCR), and optional AWS SNS notifications.
 
-- **Backend:** In a terminal, run the server so logs are visible (see [Run locally](#run-locally) below). All `[CARRIER]` and `[BEDROCK]` logs appear in this terminal.
-- **Frontend:** In another terminal: `cd frontend && npm run dev` → app at http://localhost:5173.
-- **Full testing steps and how to view logs (flat vs custom YAML, Bedrock):** see **[TESTING.md](TESTING.md)**.
+---
 
-## Run locally
+## Architecture
 
-1. **Create venv and install dependencies** (first time only):
+The system follows this flow:
+
+1. **Web portal → React frontend**  
+   Users interact with the web app (create agents, upload documents, trigger transfers).
+
+2. **React frontend → Orchestration Service (this API)**  
+   The frontend calls the backend for advisors, transfers, carrier formats, and document extraction.
+
+3. **Orchestration Service**  
+   - **Carrier adaptor:** Builds the request payload (standard simple/structured or custom YAML) and dispatches to the appropriate carrier API. Uses **AWS Bedrock (Claude)** when a carrier has a custom format YAML to adapt advisor data to the carrier’s schema.  
+   - **OCR / document processing:** Forwards uploaded documents to an external **OCR Service** (e.g. vision/OCR on AWS Bedrock or another provider) for parsing.  
+   - **Persistence:** Stores transfer request status and audit data (local JSON store or database).  
+   - **Webhook callback:** Receives status updates from carrier platforms via `POST /api/carrier/appointments/status` (e.g. completed, rejected with reason).
+
+4. **Carrier adaptor → Carrier assignment APIs**  
+   - **Standard APIs (IRI-style):** `POST /api/carrier/standard/simple/appointments` (single-level: carrierId + advisor + statesRequested) and `POST /api/carrier/standard/structured/appointments` (hierarchical: meta + agent + appointment).  
+   - **Custom API:** `POST /api/carrier/custom/appointments` for carrier-specific payloads produced by Bedrock from a carrier YAML.
+
+5. **Carrier platform → Orchestration Service**  
+   Carriers call the webhook to update submission status (e.g. completed, rejected); the orchestration service updates storage and exposes status via the admin APIs.
+
+*Place the architecture flow diagram in `docs/architecture-flow.png` for a visual reference.*
+
+---
+
+## Quick start
+
+### Run backend and frontend
+
+- **Backend:** From repo root: `cd backend && .venv/bin/uvicorn src.main:app --reload --host 0.0.0.0 --port 8000` (see [Run locally](#run-locally) for first-time setup). Watch this terminal for `[CARRIER]` and `[BEDROCK]` logs.
+- **Frontend:** `cd frontend && npm run dev` → app at http://localhost:5173.
+- **Testing (standard vs custom, Bedrock):** see **[TESTING.md](TESTING.md)**.
+
+### Run locally (first time)
+
+1. **Backend**
    ```bash
    cd backend
    python3 -m venv .venv
    .venv/bin/pip install -r requirements.txt
-   ```
-
-2. **Start the server** (uses JSON file storage by default; no database required):
-   ```bash
-   cd backend
    USE_JSON_STORE=true .venv/bin/uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
    ```
+2. Open **http://localhost:8000/docs** for Swagger UI.
 
-3. Open **http://localhost:8000/docs** for Swagger UI.
+### API authentication (Bearer token)
 
-## API authentication (Bearer token)
+All `/api/*` requests **must** include: `Authorization: Bearer <token>`.
 
-All `/api/*` requests **must** include the header: `Authorization: Bearer <token>`. Override with env:
+- **Backend:** Set `AUTH_TOKEN` in env (default in `src/main.py`).
+- **Frontend:** Set `VITE_AUTH_TOKEN` to the same value.
 
-- **Backend:** `AUTH_TOKEN` (default: see `src/main.py`).
-- **Frontend:** `VITE_AUTH_TOKEN` must match the backend token so API calls succeed.
+In Swagger, use **Authorize** and paste the token. For `curl`, add: `-H "Authorization: Bearer <token>"`.
 
-In Swagger UI, click **Authorize**, choose Bearer Auth, and paste the token. For `curl`, add: `-H "Authorization: Bearer <token>"`.
+---
 
-## Insert sample data (local JSON store)
+## Sample data (local JSON store)
 
 With `USE_JSON_STORE=true`:
 
-- **Script (no server):**  
-  `cd backend && USE_JSON_STORE=true .venv/bin/python scripts/seed_advisors.py`  
-  Writes 3 sample advisors (Jane Smith, John Doe, Maria Garcia) to `local_data/advisors.json`. Safe to run multiple times (skips existing NPNs).
+- **Script:** `cd backend && USE_JSON_STORE=true .venv/bin/python scripts/seed_advisors.py`  
+  Writes 3 sample advisors to `local_data/advisors.json` (safe to run multiple times).
+- Or create advisors via `POST /api/admin/advisors` (Swagger).
 
-You can also create advisors one by one with `POST /api/admin/advisors` (see Swagger).
+---
 
-## Carrier format YAML + Bedrock transform
+## Carrier format YAML and Bedrock (carrier adaptor)
 
-You can define each carrier’s **request (and optionally response) format** in a YAML file. That YAML is stored locally and used so that **AWS Bedrock (Claude 3.5 Sonnet)** transforms advisor data into the carrier’s expected shape before the carrier API is called.
+The **carrier adaptor** sends requests to carrier assignment APIs in one of three ways:
 
-1. **Upload a format YAML** for a carrier:
-   - `POST /api/admin/carrier-formats/{carrier_id}` with a YAML file in the request body (e.g. `carrier_id=1`; use numeric IDs 1–8).
-   - YAML describes the expected request body structure (and optionally response). Examples: `carrier_format_examples/carrier-a.example.yaml`, `carrier_format_examples/carrier-b.example.yaml`.
+| Format | When used | Carrier API path |
+|--------|-----------|------------------|
+| **Standard simple** | Carrier default is simple (single-level) | `POST /api/carrier/standard/simple/appointments` |
+| **Standard structured** | Carrier default is structured (hierarchical) | `POST /api/carrier/standard/structured/appointments` |
+| **Custom** | Carrier has a format YAML uploaded | `POST /api/carrier/custom/appointments` (payload built by Bedrock from YAML) |
 
-2. **Stored location:** `local_data/carrier_formats/{carrier_id}.yaml`.
+- **Standard simple** = `carrierId`, `advisor`, `statesRequested`.
+- **Standard structured** = `meta`, `agent`, `appointment`.
+- **Custom** = Shape defined by a carrier-specific YAML; **AWS Bedrock (Claude)** maps advisor + states into that shape.
 
-3. **When you submit an advisor to that carrier** (e.g. `POST /api/admin/advisors/{id}/carriers/submit` or dispatch-all), if a format YAML exists for that carrier, the backend calls Bedrock to produce the request body from the advisor + states; otherwise it uses the built-in **flat** or **nested** payload builders.
+### Upload and use a carrier format
 
-4. **Bedrock:** Set `AWS_REGION` and ensure the runtime has Bedrock access and a model such as `anthropic.claude-3-5-sonnet-v2:0`. Override with `BEDROCK_CLAUDE_MODEL_ID`. If Bedrock is unavailable, the built-in payload format is used.
+1. **Upload a format YAML:** `POST /api/admin/carrier-formats/{carrier_id}` with a YAML file (carrier IDs 1–8). Stored under `local_data/carrier_formats/{carrier_id}.yaml`.
+2. **On transfer** (create-and-transfer, dispatch-all, or submit): if that carrier has a YAML, the backend uses Bedrock to build the request body; otherwise it uses the built-in simple or structured builder.
+3. **Bedrock:** Set `AWS_REGION` and ensure Bedrock access (e.g. `anthropic.claude-3-5-sonnet-v2:0`). Override with `BEDROCK_CLAUDE_MODEL_ID`.
 
-- **List format IDs:** `GET /api/admin/carrier-formats` — includes `template_used` (custom_yaml) and `default_template` (flat/nested) per carrier.
-- **Get format YAML:** `GET /api/admin/carrier-formats/{carrier_id}`  
-- **Standard template (reference):** `GET /api/admin/carrier-formats/sample` — returns the **standard (flat)** YAML. Use as reference when uploading carrier-specific YAMLs.
-- **Which carrier uses which template:** `GET /api/admin/carriers` returns each carrier with `default_template` (**flat** or **nested**) and `has_custom_yaml`. Carrier IDs are numeric (1–8). Default: 1 → flat, 2 → nested, 3–8 → flat.
-- **Test transform (no submit):** `POST /api/admin/carrier-formats/test-transform` with `{"carrier_id": "1", "advisor_id": "<uuid>", "states": ["AL"]}` — returns the exact JSON payload. Use to compare built-in vs custom YAML without async dispatch.
+**Endpoints:**  
+- List formats: `GET /api/admin/carrier-formats`  
+- Get/sample: `GET /api/admin/carrier-formats/{id}`, `GET /api/admin/carrier-formats/sample`  
+- Test transform (no submit): `POST /api/admin/carrier-formats/test-transform` with `{"carrier_id":"1","advisor_id":"<uuid>","states":["AL"]}`
 
-**Test the sample endpoint** (with backend running on port 8000):
-```bash
-curl -s http://localhost:8000/api/admin/carrier-formats/sample
-```
-Expected: `{"success":true,"yaml":"# Sample carrier request format...","description":"..."}`. If you get "Connection refused", start the backend first. If the frontend still shows "Could not load sample", ensure `VITE_API_BASE_URL` points to the same origin (e.g. `http://localhost:8000` when running the API locally).
+### Carrier defaults (no custom YAML)
 
-### Do all carriers have their own YAML?
+| Carrier ID | Default | Custom YAML |
+|------------|---------|-------------|
+| 1 | simple | Optional |
+| 2 | structured | Optional |
+| 3–8 | simple | Optional |
 
-**No.** Only carriers you explicitly upload a YAML for use a custom format. The rest use a **default built-in** template:
+---
 
-| Carrier ID | Default template | Custom YAML? |
-|------------|------------------|--------------|
-| 1          | flat   | Only if you upload one |
-| 2          | nested | Only if you upload one |
-| 3 … 8      | flat (standard) | Only if you upload one |
+## Document extraction (OCR)
 
-- **flat** = payload shape: `carrierId`, `advisor`, `statesRequested`.
-- **nested** = payload shape: `meta`, `agent`, `appointment`.
-- **No YAML uploaded** → backend uses the default (flat or nested) to build the payload; no Bedrock call.
-- **YAML uploaded** → backend uses Bedrock to transform advisor + states into JSON matching the YAML; then sends that to the carrier.
+`POST /api/documents/extract` (or the mounted extract route) forwards PDF/Excel/images to an **external OCR service** (configurable via `OCR_SERVICE_URL`). The orchestration service does not run OCR itself; it delegates to that service and returns the extracted result. See the repo’s document-extraction docs for OCR service setup (e.g. Poppler for PDFs).
 
-So you can have zero, one, or many carriers with custom YAMLs; the rest always use the default template.
+---
 
-### Sample YAML to test the API
+## Async carrier dispatch and status
 
-Use the file **`carrier_format_examples/sample-for-testing.yaml`** to test upload and test-transform:
+- **Dispatch:** Create-and-transfer, dispatch-all, and submit return immediately with `status: "queued"` and `submission_ids`. The actual HTTP calls to the carrier APIs run in the **background**.
+- **Logs:** In the backend terminal you’ll see `[CARRIER] Dispatch started`, then `[CARRIER] Hitting carrier API: POST .../standard/simple/appointments` (or `.../standard/structured/...` or `.../custom/appointments`). For custom or Bedrock-built payloads you’ll see `[BEDROCK]` logs.
+- **Status updates:** Carriers (or tests) can update submission status via **`POST /api/carrier/appointments/status`** (webhook). The orchestration service stores the new status and audit data.
+- **Polling:** `GET /api/admin/carrier-submissions` to see status move from `queued` to `sent_to_carrier`, `completed`, or `error`/`rejected`.
 
-1. **Upload (UI):** Carrier format YAML page → choose a carrier (e.g. **Principal** / 3) → Choose file → select `backend/carrier_format_examples/sample-for-testing.yaml` → Upload.
-2. **Test transform (UI):** Same page → Test transform → Carrier: Principal, Agent: pick one → **Run test**. You should see `format_used: "custom_yaml"` and a payload matching the YAML shape (when Bedrock is available); otherwise you still get the default payload.
-3. **Test transform (curl):**
-   ```bash
-   curl -s -X POST http://localhost:8000/api/admin/carrier-formats/test-transform \
-     -H "Content-Type: application/json" \
-     -d '{"carrier_id":"1","advisor_id":"<advisor-uuid>","states":["AL","AK"]}'
-   ```
-   Replace `<advisor-uuid>` with an advisor ID from `GET /api/admin/advisors`. Response: `{"success":true,"payload":{...},"format_used":"flat","carrier_id":"1"}`.
-
-### See if Bedrock is actually working (different payload shape)
-
-Use **`carrier_format_examples/bedrock-test-format.yaml`**. That YAML describes a **different** structure: `application`, `applicant`, `jurisdictions` (instead of `advisor`, `statesRequested`). So you can tell at a glance whether the payload came from Bedrock or from the built-in template.
-
-1. Upload `bedrock-test-format.yaml` for one carrier (e.g. **Principal** / 3).
-2. **Test transform** for that carrier + any agent → **Run test**.
-3. **If Bedrock is working:** `format_used` is `"custom_yaml"` and the payload has top-level `application` with `applicant` and `jurisdictions` (and possibly different field names like `national_producer_number`, `email_address`).
-4. **If Bedrock is not used** (no AWS credentials or Bedrock unavailable): `format_used` is `"flat"` and the payload has `carrierId`, `advisor`, `statesRequested` — same as the built-in flat template.
-
-Other example YAMLs: `carrier-a.example.yaml` (flat shape), `carrier-b.example.yaml` (nested shape: meta/agent/appointment).
-
-### Custom YAML: supported shapes
-
-The Bedrock transform supports **any** carrier YAML shape:
-
-| YAML shape | Supported |
-|------------|-----------|
-| **Single name field** (e.g. `full_name`, `agent_name`) | Yes – AI merges advisor `first_name` + `last_name` into one value. |
-| **Separate first/last** (e.g. `first_name`, `last_name` or `agent_first_name`, `agent_last_name`) | Yes – AI maps advisor `first_name` and `last_name` to those keys at any nesting level. |
-| **Arbitrary nesting** (e.g. `application.applicant`, `meta.agent.contacts`, `level1.level2.level3`) | Yes – output JSON matches the exact structure and depth in the YAML. |
-| **Different field names** (e.g. `national_producer_number`, `email_address`, `jurisdictions`) | Yes – AI maps by meaning (npn → national_producer_number, states → jurisdictions, etc.). |
-
-You can mix these: e.g. a deeply nested YAML with a single `applicant.full_name` or with separate `applicant.first_name` and `applicant.last_name`. The model is instructed to conform to the schema and map advisor data into it.
-
-## Async carrier dispatch (background only)
-
-Carrier API calls run **only in the background**. Create-and-transfer, dispatch-all, and submit return immediately with `status: "queued"` and `submission_ids`; the actual HTTP calls to the carrier happen asynchronously.
-
-**How to test:**
-
-1. Start the backend with logs visible: `USE_JSON_STORE=true .venv/bin/uvicorn src.main:app --reload --host 0.0.0.0 --port 8000`
-2. Create a transfer (e.g. from the UI **Create agent & transfer** or curl below). The API returns right away with `"status": "queued"`.
-3. Watch the **server logs**: you’ll see `[CARRIER] Dispatch started`, then `[CARRIER] Hitting carrier API: POST ...` for each submission. For carriers using **custom YAML** or **nested (Bedrock)** you’ll see `[BEDROCK] Using Bedrock to build carrier request...` and `[BEDROCK] Invoking Claude...` before the carrier call.
-4. Poll submissions: `GET /api/admin/carrier-submissions` — status moves from `queued` to `sent_to_carrier` (or `error`) as the background task runs.
-
-**Example (create-and-transfer, async):**
+**Example (create-and-transfer with Bearer token):**
 ```bash
 curl -s -X POST http://localhost:8000/api/admin/create-and-transfer \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -d '{"agent":{"npn":"99999","first_name":"Demo","last_name":"User","email":"d@e.com","phone":"555-0000","broker_dealer":"BD","license_states":["CA","TX"]},"carriers":["1","2","3"],"states":["CA"]}'
 ```
-Response is immediate with `"status": "queued"`. Check logs for `[BEDROCK]` when carrier 2 (nested) or 3 (if custom YAML uploaded) is processed.
 
-## Data sources for carrier request payload (demo)
+---
 
-When a **transfer request is created** (create-and-transfer, dispatch-all, or submit), the payload sent to the carrier is built from:
+## AWS SNS notifications
 
-| Source | Where it comes from |
-|--------|---------------------|
-| **Advisor data** | `json_store.get_advisor(advisor_id)` (or the advisor from the request). Fields: `npn`, `first_name`, `last_name`, `email`, `phone`, `broker_dealer`, `license_states`. |
-| **Submitted states** | Request body: `body.states` in create-and-transfer, or per-carrier `submitted_states` in dispatch-all/submit. |
-| **YAML format** | Loaded **at request time** from `carrier_formats_store.load_carrier_format(carrier_id)` → reads `backend/local_data/carrier_formats/{carrier_id}.yaml`. |
+Optional notifications for agent transfers, document processed, and custom events. Set `SNS_ENABLED=true`, `SNS_TOPIC_ARN`, and AWS credentials in `.env`. See [SNS_SETUP.md](SNS_SETUP.md) and [SNS_TRIGGERS.md](SNS_TRIGGERS.md).
 
-So: **add or update a carrier format (YAML) before creating a transfer**; the next transfer that includes that carrier will use the current YAML from disk. No restart needed. For carriers with custom YAML, Bedrock is invoked with that YAML + advisor + states to produce the JSON request body; for flat/nested without custom YAML, the built-in builders (or Bedrock with built-in nested YAML) are used.
-
-## AWS SNS Notifications
-
-The API includes built-in support for sending notifications via **AWS SNS (Simple Notification Service)**:
-
-- **Automatic notifications** when agents are transferred to carriers
-- **Automatic notifications** when agents are dispatched to multiple carriers  
-- **Automatic notifications** for single carrier submissions
-- Optional notifications when documents are processed
-- Custom notifications for workflow events
-
-### Automatic Triggers
-
-SNS notifications are **automatically sent** for:
-- `POST /api/admin/create-and-transfer` - Agent created and transferred
-- `POST /api/admin/advisors/{id}/carriers/dispatch-all` - Dispatched to multiple carriers
-- `POST /api/admin/advisors/{id}/carriers/{carrier_id}/submit` - Single carrier submission
-
-See [SNS_TRIGGERS.md](SNS_TRIGGERS.md) for complete trigger documentation.
-
-### Quick Setup
-
-1. **Configure AWS credentials and SNS topic in `.env`:**
-   ```env
-   AWS_REGION=us-east-1
-   AWS_ACCESS_KEY_ID=your_access_key
-   AWS_SECRET_ACCESS_KEY=your_secret_key
-   SNS_TOPIC_ARN=arn:aws:sns:us-east-1:123456789:your-topic
-   SNS_ENABLED=true
-   ```
-
-2. **Test SNS:**
-   ```bash
-   cd backend
-   .venv/bin/python test_sns.py
-   ```
-
-3. **API Endpoints:** All SNS endpoints are under `/api/notifications`. See interactive docs at `http://localhost:8000/docs#/Notifications`.
-
-4. **Full documentation:** See [SNS_SETUP.md](SNS_SETUP.md) for complete setup instructions, API reference, and examples.
-
-### Example Usage
-
-Send notification when document is processed:
-```bash
-curl -X POST "http://localhost:8000/api/extract?send_notification=true" \
-  -F "file=@advisor_form.pdf"
-```
-
-Send custom notification:
-```bash
-curl -X POST "http://localhost:8000/api/notifications/send" \
-  -H "Content-Type: application/json" \
-  -d '{"subject": "Test", "message": "Hello from API"}'
-```
+---
 
 ## Environment
 
-- `USE_JSON_STORE` — set to `true` (default) to use local JSON files under `local_data/`; set to `false` to use a database (set `DATABASE_URL`).
-- `S3_BUCKET` — optional; if set, advisor file uploads go to S3; if unset, uploads are stored under `local_data/uploads/` for local dev.
-- `CARRIER_BASE_URL` — base URL for carrier API calls (default: http://localhost:8000).
-- `BEDROCK_CLAUDE_MODEL_ID` — optional; Bedrock model for YAML-based transform. If you see "on-demand throughput isn't supported", your account may require an **inference profile** ARN instead of the model ID (set this env to the profile ARN from the Bedrock console). The code will try fallback models and log at INFO when one succeeds.
-- `AWS_REGION` — used for Bedrock and SNS (default: us-east-1).
-- `SNS_TOPIC_ARN` — optional; ARN of SNS topic for notifications.
-- `SNS_ENABLED` — optional; set to `true` to enable SNS notifications (default: false).
+| Variable | Purpose |
+|----------|---------|
+| `USE_JSON_STORE` | `true` (default): local JSON under `local_data/`; `false`: use DB (`DATABASE_URL`) |
+| `AUTH_TOKEN` | Bearer token for `/api/*` (default in code) |
+| `CARRIER_BASE_URL` | Base URL for carrier API calls (default: http://localhost:8000) |
+| `OCR_SERVICE_URL` | Document extraction service URL |
+| `AWS_REGION` | Bedrock and SNS (default: us-east-1) |
+| `BEDROCK_CLAUDE_MODEL_ID` | Optional; Bedrock model (or inference profile ARN) for carrier format transform |
+| `SNS_TOPIC_ARN`, `SNS_ENABLED` | Optional; SNS notifications |
+
+---
+
+## Relevant docs
+
+- **[TESTING.md](TESTING.md)** — End-to-end testing, logs, standard vs custom flows.
+- **Swagger** — http://localhost:8000/docs (use **Authorize** with the Bearer token).
+- **Carrier API paths** — Under the **Carrier** tag: `standard/simple/appointments`, `standard/structured/appointments`, `custom/appointments`, and `appointments/status` (webhook).
