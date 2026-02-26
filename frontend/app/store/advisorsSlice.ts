@@ -1,20 +1,16 @@
 import { createSlice, createAsyncThunk } from "@reduxjs/toolkit";
-import { api, type AdvisorListItem, type ListAdvisorsResponse, type SeedResponse } from "~/lib/api";
+import { api, type AdvisorListItem, type ListAdvisorsResponse } from "~/lib/api";
 
 export interface AdvisorsState {
   advisors: AdvisorListItem[];
   loading: boolean;
   error: string | null;
-  seedLoading: boolean;
-  seedError: string | null;
 }
 
 const initialState: AdvisorsState = {
   advisors: [],
   loading: false,
   error: null,
-  seedLoading: false,
-  seedError: null,
 };
 
 export const fetchAdvisors = createAsyncThunk(
@@ -31,26 +27,12 @@ export const fetchAdvisors = createAsyncThunk(
   }
 );
 
-export const seedAdvisors = createAsyncThunk(
-  "advisors/seedAdvisors",
-  async (_, { rejectWithValue }) => {
-    try {
-      const res = await api.post<SeedResponse>("/api/admin/seed");
-      if (!res.success) throw new Error("Seed failed");
-      return res;
-    } catch (e) {
-      return rejectWithValue(e instanceof Error ? e.message : "Failed to seed advisors");
-    }
-  }
-);
-
 const advisorsSlice = createSlice({
   name: "advisors",
   initialState,
   reducers: {
     clearError: (state) => {
       state.error = null;
-      state.seedError = null;
     },
   },
   extraReducers: (builder) => {
@@ -67,19 +49,6 @@ const advisorsSlice = createSlice({
       .addCase(fetchAdvisors.rejected, (state, action) => {
         state.loading = false;
         state.error = action.payload as string;
-      })
-      .addCase(seedAdvisors.pending, (state) => {
-        state.seedLoading = true;
-        state.seedError = null;
-      })
-      .addCase(seedAdvisors.fulfilled, (state, action) => {
-        state.seedLoading = false;
-        state.seedError = null;
-        state.advisors = [...state.advisors]; // trigger refetch in UI or merge
-      })
-      .addCase(seedAdvisors.rejected, (state, action) => {
-        state.seedLoading = false;
-        state.seedError = action.payload as string;
       });
   },
 });

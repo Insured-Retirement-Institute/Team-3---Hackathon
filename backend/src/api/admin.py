@@ -746,27 +746,6 @@ async def list_advisors(
     }
 
 
-@router.post("/seed")
-async def seed_advisors(db: Session = Depends(get_db)):
-    """Create sample advisors in local JSON store (USE_JSON_STORE=true only). For UI integration."""
-    if db is not None:
-        raise HTTPException(400, "Seed is only supported when USE_JSON_STORE=true")
-    seed_data = [
-        {"npn": "12345678", "first_name": "Jane", "last_name": "Smith", "email": "jane.smith@example.com", "phone": "555-0101", "broker_dealer": "Example BD", "license_states": ["CA", "TX", "NY"], "status": "pending"},
-        {"npn": "87654321", "first_name": "John", "last_name": "Doe", "email": "john.doe@example.com", "phone": "555-0102", "broker_dealer": "Example BD", "license_states": ["CA", "FL"], "status": "pending"},
-        {"npn": "11223344", "first_name": "Maria", "last_name": "Garcia", "email": "maria.garcia@example.com", "phone": "555-0103", "broker_dealer": "Another BD", "license_states": ["TX", "AZ", "NM"], "status": "completed"},
-    ]
-    created = []
-    for data in seed_data:
-        try:
-            advisor_id = json_store.create_advisor(data)
-            created.append({"id": advisor_id, "npn": data["npn"], "name": f"{data['first_name']} {data['last_name']}"})
-        except ValueError as e:
-            if "NPN already exists" not in str(e):
-                raise
-    return {"success": True, "created": len(created), "advisors": created}
-
-
 @router.get("/debug/bedrock")
 async def debug_bedrock():
     """Check why Bedrock might not be running: env vars (set/not set), region, and last error from boto3. No secrets returned."""

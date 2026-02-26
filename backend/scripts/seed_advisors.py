@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
-Seed sample advisors into the local JSON store via the API.
-Run with the backend server up: USE_JSON_STORE=true uvicorn src.main:app --port 8000
-Then: python scripts/seed_advisors.py
-Or call POST /api/admin/seed (see main.py) with the server running.
+Seed sample advisors into the local JSON store (writes directly to local_data/advisors.json).
+Run: cd backend && USE_JSON_STORE=true .venv/bin/python scripts/seed_advisors.py
 """
 import os
 import sys

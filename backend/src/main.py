@@ -93,18 +93,33 @@ def custom_openapi():
     openapi_schema = get_openapi(
         title=app.title,
         version=app.version,
-        description=app.description,
+        description=(
+            app.description
+            + "\n\n**Authentication:** All `/api/*` endpoints require the header: `Authorization: Bearer <token>`. "
+            "Use the **Authorize** button above to set the token; otherwise requests return 401."
+        ),
         routes=app.routes,
     )
+    if "components" not in openapi_schema:
+        openapi_schema["components"] = {}
     openapi_schema["components"]["securitySchemes"] = {
         "BearerAuth": {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "Bearer token. Set AUTH_TOKEN in env to match the value sent by clients.",
+            "description": "Required for all /api/* endpoints. Set AUTH_TOKEN in env; use Authorize to send it.",
         }
     }
     openapi_schema["security"] = [{"BearerAuth": []}]
+    # Apply security to every operation so Swagger UI shows the lock icon on each endpoint
+    paths = openapi_schema.get("paths", {})
+    for path_key, path_item in paths.items():
+        if not path_key.startswith("/api"):
+            continue
+        for method in ("get", "post", "put", "patch", "delete"):
+            op = path_item.get(method)
+            if isinstance(op, dict):
+                op["security"] = [{"BearerAuth": []}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 

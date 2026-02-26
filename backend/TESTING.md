@@ -47,7 +47,7 @@ Goal: one carrier **flat** (no Bedrock), one carrier **custom YAML** (Bedrock). 
 ### Step 3.1 – Seed advisors (optional)
 
 ```bash
-curl -s -X POST http://localhost:8000/api/admin/seed
+cd backend && USE_JSON_STORE=true .venv/bin/python scripts/seed_advisors.py
 ```
 
 ### Step 3.2 – Upload custom YAML for one carrier (e.g. Principal = 3)
@@ -143,7 +143,7 @@ Then you see the "Framing request" / Bedrock lines, then the **output** carrier 
 - Then the carrier API is called:
 
 ```
-[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/flat/appointments (carrier_id=1, format=flat)
+[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/standard/simple/appointments (carrier_id=1, format=flat)
 [CARRIER] Carrier API responded: ...
 ```
 
@@ -162,7 +162,7 @@ So for carrier 1 you **do not** see any `[BEDROCK]` line. That’s expected: fla
 - Then the carrier API is called with that Bedrock-generated payload:
 
 ```
-[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/appointments (carrier_id=3, format=custom_yaml)
+[CARRIER] Hitting carrier API: POST http://localhost:8000/api/carrier/custom/appointments (carrier_id=3, format=custom_yaml)
 [CARRIER] Carrier API responded: ...
 ```
 
@@ -174,7 +174,7 @@ So for carrier 3 you **do** see the three `[BEDROCK]` lines above before the `[C
 
 | Carrier setup              | Log you see (payload build) | Then |
 |----------------------------|-----------------------------|------|
-| **Flat (e.g. 1)**         | `[CARRIER] Framing request for carrier_id=1 as format=flat (direct builder, no Bedrock)` | No `[BEDROCK]`; then `[CARRIER] Hitting carrier API... flat/appointments` |
+| **Flat (e.g. 1)**         | `[CARRIER] Framing request for carrier_id=1 as format=flat (direct builder, no Bedrock)` | No `[BEDROCK]`; then `[CARRIER] Hitting carrier API... standard/simple/appointments` |
 | **Custom YAML (e.g. 3)**   | `[BEDROCK] Using Bedrock... carrier_id=3 (custom YAML...)` → `[BEDROCK] Invoking Claude...` → `[BEDROCK] Bedrock transform succeeded...` | Then `[CARRIER] Hitting carrier API... /appointments` |
 
 ---

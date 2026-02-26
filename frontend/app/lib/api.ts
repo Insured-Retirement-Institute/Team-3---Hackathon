@@ -101,12 +101,6 @@ export interface ListCarrierSubmissionsResponse {
   data: CarrierSubmissionItem[];
 }
 
-export interface SeedResponse {
-  success: boolean;
-  created: number;
-  advisors: { id: string; npn: string; name: string }[];
-}
-
 export interface CarrierFormatIdsResponse {
   success: boolean;
   carrier_ids: string[];

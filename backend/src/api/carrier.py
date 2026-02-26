@@ -26,9 +26,33 @@ class AdvisorPayload(BaseModel):
     license_states: List[str] = Field(default_factory=list)
 
 
+# ---------- Standard flat format (expandable in Swagger) ----------
+class StandardFlatAdvisorRequest(BaseModel):
+    """Advisor block for standard flat carrier format."""
+    advisor_id: Optional[str] = Field(None, description="Advisor UUID or id")
+    id: Optional[str] = Field(None, description="Alias for advisor_id")
+    npn: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    broker_dealer: Optional[str] = None
+    brokerDealer: Optional[str] = None
+    license_states: Optional[List[str]] = Field(default_factory=list)
+    licenseStates: Optional[List[str]] = None
+
+
+class StandardFlatAppointmentRequest(BaseModel):
+    """Standard flat carrier appointment request (carrierId + advisor + statesRequested)."""
+    carrierId: str = Field(..., description="Carrier ID (e.g. 1)")
+    advisor: StandardFlatAdvisorRequest = Field(..., description="Advisor details")
+    statesRequested: List[str] = Field(default_factory=list, description="Requested state codes")
+
+
 class CarrierAAppointmentRequest(BaseModel):
+    """Alias for OpenAPI; use StandardFlatAppointmentRequest in routes."""
     carrierId: str
-    advisor: Dict[str, Any]
+    advisor: StandardFlatAdvisorRequest
     statesRequested: List[str] = Field(default_factory=list)
 
 
@@ -39,10 +63,57 @@ class CarrierAAppointmentResponse(BaseModel):
     acceptedStates: List[str] = Field(default_factory=list)
 
 
+# ---------- Standard nested format (expandable in Swagger) ----------
+class StandardNestedMetaRequest(BaseModel):
+    """Meta block for standard nested carrier format."""
+    carrier_id: Optional[str] = Field(None, description="Carrier ID")
+    carrierId: Optional[str] = None
+
+
+class StandardNestedNameRequest(BaseModel):
+    first: Optional[str] = None
+    last: Optional[str] = None
+
+
+class StandardNestedContactRequest(BaseModel):
+    type: Optional[str] = Field(None, description="e.g. email, phone")
+    value: Optional[str] = None
+
+
+class StandardNestedAgentRequest(BaseModel):
+    """Agent block for standard nested carrier format."""
+    advisor_id: Optional[str] = Field(None, description="Advisor UUID or id")
+    id: Optional[str] = None
+    npn: Optional[str] = None
+    name: Optional[StandardNestedNameRequest] = None
+    contacts: Optional[List[StandardNestedContactRequest]] = Field(default_factory=list)
+    broker_dealer: Optional[str] = None
+    brokerDealer: Optional[str] = None
+    license_states: Optional[List[str]] = Field(default_factory=list)
+    licenseStates: Optional[List[str]] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+
+class StandardNestedAppointmentBlockRequest(BaseModel):
+    """Appointment block (states) for standard nested format."""
+    states: Optional[List[str]] = Field(default_factory=list, description="Requested state codes")
+
+
+class StandardNestedAppointmentRequest(BaseModel):
+    """Standard nested carrier appointment request (meta + agent + appointment)."""
+    meta: StandardNestedMetaRequest = Field(..., description="Carrier meta")
+    agent: StandardNestedAgentRequest = Field(..., description="Agent details")
+    appointment: StandardNestedAppointmentBlockRequest = Field(..., description="Appointment / states")
+
+
 class CarrierBAppointmentRequest(BaseModel):
-    meta: Dict[str, Any]
-    agent: Dict[str, Any]
-    appointment: Dict[str, Any]
+    """Alias for OpenAPI; use StandardNestedAppointmentRequest in routes."""
+    meta: StandardNestedMetaRequest
+    agent: StandardNestedAgentRequest
+    appointment: StandardNestedAppointmentBlockRequest
 
 
 class CarrierBAppointmentResponse(BaseModel):
@@ -62,9 +133,16 @@ class CarrierStatusUpdateRequest(BaseModel):
     rejected_states: List[str] = Field(default_factory=list)
 
 
+def _to_dict(obj: Any) -> dict:
+    """Convert Pydantic model to dict for normalizer compatibility."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    return dict(obj) if obj else {}
+
+
 def _normalize_advisor_from_a(req: CarrierAAppointmentRequest) -> Tuple[str, AdvisorPayload, List[str]]:
     carrier_id = req.carrierId
-    a = req.advisor
+    a = _to_dict(req.advisor)
     advisor_id = str(a.get("advisor_id") or a.get("id") or "")
     if not advisor_id:
         raise HTTPException(400, "advisor_id is required")
@@ -83,11 +161,12 @@ def _normalize_advisor_from_a(req: CarrierAAppointmentRequest) -> Tuple[str, Adv
 
 
 def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> Tuple[str, AdvisorPayload, List[str]]:
-    carrier_id = str(req.meta.get("carrier_id") or req.meta.get("carrierId") or "")
+    meta = _to_dict(req.meta)
+    carrier_id = str(meta.get("carrier_id") or meta.get("carrierId") or "")
     if not carrier_id:
         raise HTTPException(400, "carrier_id is required")
 
-    agent = req.agent
+    agent = _to_dict(req.agent)
     advisor_id = str(agent.get("advisor_id") or agent.get("id") or "")
     if not advisor_id:
         raise HTTPException(400, "advisor_id is required")
@@ -115,14 +194,21 @@ def _normalize_advisor_from_b(req: CarrierBAppointmentRequest) -> Tuple[str, Adv
         license_states=list(agent.get("license_states") or agent.get("licenseStates") or []),
     )
 
-    states = req.appointment.get("states") if isinstance(req.appointment, dict) else None
+    appointment = _to_dict(req.appointment)
+    states = appointment.get("states") if appointment else None
     return carrier_id, payload, list(states or [])
 
 
-@router.post("/flat/appointments", response_model=CarrierAAppointmentResponse)
-async def flat_carrier_appointments(req: CarrierAAppointmentRequest):
-    """Flat-format carrier endpoint (carrier ID 1 and others using flat template)."""
-    carrier_id, _advisor, requested_states = _normalize_advisor_from_a(req)
+@router.post(
+    "/standard/simple/appointments",
+    response_model=CarrierAAppointmentResponse,
+    summary="Standard simple appointment",
+    description="Standard carrier format: carrierId + advisor + statesRequested. Used for carrier ID 1 and others with the simple (single-level) template.",
+)
+async def standard_simple_appointments(req: StandardFlatAppointmentRequest):
+    """Standard simple (single-level) carrier endpoint (carrier ID 1 and others)."""
+    # Normalizer expects CarrierAAppointmentRequest shape
+    carrier_id, _advisor, requested_states = _normalize_advisor_from_a(CarrierAAppointmentRequest(carrierId=req.carrierId, advisor=req.advisor, statesRequested=req.statesRequested))
     tracking_id = f"1-{uuid.uuid4().hex[:10]}"
     return CarrierAAppointmentResponse(
         carrierId=carrier_id,
@@ -132,10 +218,15 @@ async def flat_carrier_appointments(req: CarrierAAppointmentRequest):
     )
 
 
-@router.post("/nested/appointments", response_model=CarrierBAppointmentResponse)
-async def nested_carrier_appointments(req: CarrierBAppointmentRequest):
-    """Nested-format carrier endpoint (carrier ID 2)."""
-    carrier_id, _advisor, requested_states = _normalize_advisor_from_b(req)
+@router.post(
+    "/standard/structured/appointments",
+    response_model=CarrierBAppointmentResponse,
+    summary="Standard structured appointment",
+    description="Standard carrier format: meta + agent + appointment (hierarchical). Used for carrier ID 2.",
+)
+async def standard_structured_appointments(req: StandardNestedAppointmentRequest):
+    """Standard structured (hierarchical) carrier endpoint (carrier ID 2)."""
+    carrier_id, _advisor, requested_states = _normalize_advisor_from_b(CarrierBAppointmentRequest(meta=req.meta, agent=req.agent, appointment=req.appointment))
     tracking_id = f"2-{uuid.uuid4().hex[:10]}"
     return CarrierBAppointmentResponse(
         meta={"carrier_id": carrier_id, "carrier_tracking_id": tracking_id},
@@ -143,8 +234,37 @@ async def nested_carrier_appointments(req: CarrierBAppointmentRequest):
     )
 
 
-@router.post("/appointments")
-async def carrier_appointments_custom(payload: Dict[str, Any] = Body(...)):
+class CustomApplicantRequest(BaseModel):
+    """Applicant block (example for custom/Bedrock format)."""
+    id: Optional[str] = None
+    national_producer_number: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email_address: Optional[str] = None
+    phone_number: Optional[str] = None
+    broker_dealer: Optional[str] = None
+    licensed_states: Optional[List[str]] = None
+
+
+class CustomApplicationRequest(BaseModel):
+    """Application block (example for custom/Bedrock format)."""
+    carrier_code: Optional[str] = None
+    applicant: Optional[CustomApplicantRequest] = None
+    jurisdictions: Optional[List[str]] = None
+
+
+class CustomAppointmentRequest(BaseModel):
+    """Custom carrier payload (Bedrock/custom YAML shape). Extra fields allowed."""
+    model_config = {"extra": "allow"}
+    application: Optional[CustomApplicationRequest] = Field(None, description="Example shape; actual shape depends on carrier YAML")
+
+
+@router.post(
+    "/custom/appointments",
+    summary="Custom format appointment",
+    description="Custom carrier format: payload shape defined by carrier YAML (Bedrock transform). Used when carrier has custom format uploaded.",
+)
+async def custom_appointments(payload: CustomAppointmentRequest):
     """
     Accept any JSON payload (custom YAML / Bedrock-generated format).
     Used when request_data.carrier_format is 'custom_yaml'. Returns a generic success response.

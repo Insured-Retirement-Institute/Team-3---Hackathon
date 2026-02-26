@@ -2,17 +2,20 @@
 # Test the three carrier API endpoints with sample payloads (no Bedrock, direct payloads).
 # Usage: ./scripts/test_carrier_endpoints.sh [BASE_URL]
 # Requires: backend running (e.g. http://localhost:8000).
-# Endpoints: /flat/appointments (flat), /nested/appointments (nested), /appointments (custom JSON).
+# Endpoints: /standard/simple/appointments, /standard/structured/appointments, /custom/appointments.
 
 set -e
 BASE_URL="${1:-http://localhost:8000}"
+# Use AUTH_TOKEN env or default (must match backend)
+AUTH_TOKEN="${AUTH_TOKEN:-eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJJUi1EZW1vIiwiZXhwIjoxOTk5OTk5OTk5fQ.dummy}"
 echo "=== Testing carrier endpoints (base_url=$BASE_URL) ==="
 
-# 1. Flat format -> POST /api/carrier/flat/appointments
+# 1. Standard flat -> POST /api/carrier/standard/flat/appointments
 echo ""
-echo "--- 1. Flat format (direct): POST /api/carrier/flat/appointments ---"
-FLAT_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/flat/appointments" \
+echo "--- 1. Standard flat: POST /api/carrier/standard/flat/appointments ---"
+FLAT_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/standard/flat/appointments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -d '{
     "carrierId": "1",
     "advisor": {
@@ -29,11 +32,12 @@ FLAT_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/flat/appointments" \
   }')
 echo "$FLAT_RESP" | python3 -m json.tool 2>/dev/null || echo "$FLAT_RESP"
 
-# 2. Nested format -> POST /api/carrier/nested/appointments
+# 2. Standard structured -> POST /api/carrier/standard/structured/appointments
 echo ""
-echo "--- 2. Nested format (direct): POST /api/carrier/nested/appointments ---"
-NESTED_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/nested/appointments" \
+echo "--- 2. Standard structured: POST /api/carrier/standard/structured/appointments ---"
+NESTED_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/standard/structured/appointments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -d '{
     "meta": { "carrier_id": "2" },
     "agent": {
@@ -51,11 +55,12 @@ NESTED_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/nested/appointments" \
   }')
 echo "$NESTED_RESP" | python3 -m json.tool 2>/dev/null || echo "$NESTED_RESP"
 
-# 3. Custom format (Bedrock-style payload) -> POST /api/carrier/appointments
+# 3. Custom format (Bedrock-style payload) -> POST /api/carrier/custom/appointments
 echo ""
-echo "--- 3. Custom format (e.g. Bedrock-generated): POST /api/carrier/appointments ---"
-CUSTOM_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/appointments" \
+echo "--- 3. Custom format: POST /api/carrier/custom/appointments ---"
+CUSTOM_RESP=$(curl -s -X POST "$BASE_URL/api/carrier/custom/appointments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $AUTH_TOKEN" \
   -d '{
     "application": {
       "carrier_code": "3",

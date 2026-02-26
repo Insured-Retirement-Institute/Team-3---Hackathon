@@ -79,11 +79,11 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     continue
 
                 if carrier_format == "flat":
-                    path = "/api/carrier/flat/appointments"
+                    path = "/api/carrier/standard/simple/appointments"
                 elif carrier_format == "nested":
-                    path = "/api/carrier/nested/appointments"
+                    path = "/api/carrier/standard/structured/appointments"
                 elif carrier_format == "custom_yaml":
-                    path = "/api/carrier/appointments"
+                    path = "/api/carrier/custom/appointments"
                 else:
                     json_store.update_submission(submission_id, {"status": "error", "error_message": f"Unknown carrier_format: {carrier_format}"})
                     continue
@@ -166,11 +166,11 @@ async def dispatch_carrier_submissions(submission_ids: list[str], carrier_base_u
                     continue
 
                 if carrier_format == "flat":
-                    path = "/api/carrier/flat/appointments"
+                    path = "/api/carrier/standard/simple/appointments"
                 elif carrier_format == "nested":
-                    path = "/api/carrier/nested/appointments"
+                    path = "/api/carrier/standard/structured/appointments"
                 elif carrier_format == "custom_yaml":
-                    path = "/api/carrier/appointments"
+                    path = "/api/carrier/custom/appointments"
                 else:
                     submission.status = "error"
                     submission.error_message = f"Unknown carrier_format: {carrier_format}"

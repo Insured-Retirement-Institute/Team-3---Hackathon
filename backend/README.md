@@ -34,14 +34,11 @@ In Swagger UI, click **Authorize**, choose Bearer Auth, and paste the token. For
 
 ## Insert sample data (local JSON store)
 
-With the server running and `USE_JSON_STORE=true`:
+With `USE_JSON_STORE=true`:
 
-- **Option A – API:** `curl -X POST http://localhost:8000/api/admin/seed`  
-  Creates 3 sample advisors (Jane Smith, John Doe, Maria Garcia). Safe to call multiple times (skips existing NPNs).
-
-- **Option B – Script (no server):**  
+- **Script (no server):**  
   `cd backend && USE_JSON_STORE=true .venv/bin/python scripts/seed_advisors.py`  
-  Writes directly to `local_data/advisors.json`.
+  Writes 3 sample advisors (Jane Smith, John Doe, Maria Garcia) to `local_data/advisors.json`. Safe to run multiple times (skips existing NPNs).
 
 You can also create advisors one by one with `POST /api/admin/advisors` (see Swagger).
 
